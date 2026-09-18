@@ -1,7 +1,7 @@
 ---
 name: desktop-contract
 version: "1.0"
-last_updated: "2026-09-16"
+last_updated: "2026-09-18"
 id: desktop-contract
 one_line_purpose: Maintain Utah identity, Bluefin desktop defaults, and first-boot Flatpak policy.
 entry_point: docs/skills/desktop-contract.md
