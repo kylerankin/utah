@@ -131,6 +131,7 @@ apps = [
 
 [services]
 enabled = [
+  "bluetooth.service",
   "bootc-unified-storage.service",
   "brew-setup.service",
   "dconf-update.service",

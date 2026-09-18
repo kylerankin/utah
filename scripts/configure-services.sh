@@ -59,7 +59,11 @@ rm -f /usr/lib/systemd/system/*.wants/rechunker-group-fix.service \
 enable_unit brew-setup.service
 enable_unit flatpak-nuke-fedora.service
 enable_unit flatpak-preinstall.service
+# Bluetooth is firmware-less on the X230's BCM20702 (no BCM20702A1 blob is
+# needed), but the service was never enabled, so no adapter appears even with
+# bluez installed. Enable it next to the other desktop units; see #98.
 enable_unit gdm.service
+enable_unit bluetooth.service
 enable_unit firewalld.service
 enable_unit fwupd.service
 enable_unit fwupd-refresh.timer
