@@ -95,6 +95,31 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn('"dir:${PAYLOAD_EXPORT}"', script)
         self.assertIn('dir:/payload "containers-storage:$1"', script)
 
+    def test_iso_budget_guard_fails_closed_above_ceiling(self):
+        # The budget guard (#128) is the whole point of the size drift this PR
+        # closes. Extract the real block and run it with du stubbed so we can
+        # drive both the byte count (-b) and the human size (-sh) without a
+        # real ISO on disk -- the test exercises the logic, not a copy of it.
+        script = (ROOT / "iso/scripts/build-iso.sh").read_text()
+        self.assertIn("ISO_MAX_GB", script)
+        self.assertIn("UTAH_ISO_MAX_GB", script)
+        start = script.index("iso_max_bytes=$(( ISO_MAX_GB")
+        end = script.index("\nfi\n", start) + len("\nfi\n")
+        guard = script[start:end]
+        run = (
+            "du() { if [ \"$1\" = \"-b\" ]; then echo \"$DU_BYTES\"; "
+            "else echo \"$DU_HUMAN\"; fi; };\n"
+            "ISO_MAX_GB=${ISO_MAX_GB:-8}; OUTPUT_ISO=/tmp/utah-fakeiso\n"
+            + guard
+        )
+        under = {"DU_BYTES": str(7 * 1024 ** 3), "DU_HUMAN": "7.0G"}
+        result = subprocess.run(["bash", "-eu", "-c", run], capture_output=True, text=True, env=under)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        over = {"DU_BYTES": str(8 * 1024 ** 3 + 512 * 1024 ** 2), "DU_HUMAN": "8.5G"}
+        result = subprocess.run(["bash", "-eu", "-c", run], capture_output=True, text=True, env=over)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("exceeds 8 GB budget", result.stderr)
+
     def test_build_explicitly_dispatches_iso_after_both_image_jobs(self):
         import yaml
         build = yaml.safe_load((ROOT / ".github/workflows/build.yml").read_text())

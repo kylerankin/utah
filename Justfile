@@ -64,7 +64,10 @@ check:
     grep -q 'ENABLE_SSHD="${ENABLE_SSHD:-0}"' Justfile
     grep -q 'ARG PACKAGE_IMAGE_SHA=' Containerfile
     grep -q 'ARG PACKAGE_IMAGE_REF=' Containerfile
-    grep -q 'COPY --from=packages /repository /etc/utah-packages' Containerfile
+    grep -q -- '--mount=type=bind,from=packages,source=/repository,target=/etc/utah-packages,ro' Containerfile
+    # The package repository is bind mounted, never committed; a COPY would ship
+    # the whole ~4 GB RPM repository in every image and of every ISO (#128).
+    ! grep -q 'COPY --from=packages' Containerfile
     # Every executable release asset fetched during composition must be pinned
     # and verified; no build may resolve a mutable latest release.
     python3 scripts/check-download-integrity.py
