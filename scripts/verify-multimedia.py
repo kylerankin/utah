@@ -49,6 +49,51 @@ def released(pkg: str) -> str:
     return out.stdout.strip()
 
 
+def vaapi_probe(
+    which=shutil.which,
+    globber=glob.glob,
+    runner=subprocess.run,
+    out=print,
+) -> list[str]:
+    """Assert the VA-API codec path, and return any failures.
+
+    Two different things are being checked here.
+
+    The libva shared library is hardware-independent -- either the override
+    installed it or it did not -- so it always gates the build.
+
+    Running vainfo is not. vainfo is NOT absent from the image: libva-utils
+    ships /usr/bin/vainfo, it is part of the installed Bluefin contract
+    (packages/bluefin.toml, [fedora]), and the factory publishes
+    libva-utils-2.24.0-2.hum1.bfin. But initialising a VA-API driver needs a
+    DRM render node, and an image build has no /dev/dri, so there vainfo always
+    exits non-zero no matter how correct the RPM transaction was. Gate on the
+    render node rather than on vainfo's exit status: skip with a note when
+    there is no device to probe, and keep the probe fatal where there is one,
+    so a genuine driver regression still fails the check instead of being
+    quietly downgraded to a comment.
+    """
+    failures: list[str] = []
+    if not (globber("/usr/lib64/libva.so*") or globber("/usr/lib/libva.so*")):
+        failures.append("libva shared library not present")
+
+    if not which("vainfo"):
+        out("NOTE: vainfo not installed; VA-API capability not probed")
+    elif not globber("/dev/dri/renderD*"):
+        out(
+            "NOTE: no DRM render node (/dev/dri/renderD*), as in an image "
+            "build; skipping the VA-API probe rather than failing on it"
+        )
+    else:
+        result = runner(["vainfo"], capture_output=True, text=True, check=False)
+        probe = (result.stdout + result.stderr).lower()
+        if result.returncode != 0 or "no driver" in probe or "error" in probe:
+            failures.append("vainfo could not initialise a VA-API driver")
+        else:
+            out("vainfo initialised a VA-API driver")
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -88,37 +133,7 @@ def main() -> int:
                 f"{pkg}: release {release!r} is not a factory (Hummingbird 'hum') build"
             )
 
-    # Representative codec capability: VA-API. libva is always one of the
-    # installed overrides and is the front-end the media driver plugs into, so
-    # its shared library is a capability marker assertable today. That check is
-    # hardware-independent, so it always gates the build.
-    #
-    # vainfo is NOT absent: libva-utils ships /usr/bin/vainfo and is part of the
-    # installed Bluefin contract (packages/bluefin.toml, [fedora]), and the
-    # factory publishes libva-utils-2.24.0-2.hum1.bfin. Initialising a VA-API
-    # driver needs a DRM render node, though, and an image build has no
-    # /dev/dri -- so the probe is only meaningful where one exists. Gate on the
-    # render node rather than on vainfo's exit status: skip with a note during
-    # a build, and keep the probe fatal on real hardware so a genuine driver
-    # regression still fails instead of being downgraded to a comment.
-    if not (glob.glob("/usr/lib64/libva.so*") or glob.glob("/usr/lib/libva.so*")):
-        failures.append("libva shared library not present")
-    vainfo = shutil.which("vainfo")
-    render_nodes = glob.glob("/dev/dri/renderD*")
-    if not vainfo:
-        print("NOTE: vainfo not installed; VA-API capability not probed")
-    elif not render_nodes:
-        print(
-            "NOTE: no DRM render node (/dev/dri/renderD*), as in an image "
-            "build; skipping the VA-API probe rather than failing on it"
-        )
-    else:
-        out = subprocess.run(["vainfo"], capture_output=True, text=True, check=False)
-        probe = (out.stdout + out.stderr).lower()
-        if out.returncode != 0 or "no driver" in probe or "error" in probe:
-            failures.append("vainfo could not initialise a VA-API driver")
-        else:
-            print("vainfo initialised a VA-API driver")
+    failures += vaapi_probe()
 
     if failures:
         print("multimedia contract failed:", *failures, sep="\n  ", file=sys.stderr)
