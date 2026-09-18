@@ -90,23 +90,31 @@ def main() -> int:
 
     # Representative codec capability: VA-API. libva is always one of the
     # installed overrides and is the front-end the media driver plugs into, so
-    # its shared library is a capability marker assertable today. The hardware
-    # media driver and vaapi-utils are not published by the factory yet, so
-    # vainfo is absent and its probe degrades to a note rather than a false
-    # failure; the same probe asserts full capability when they ship.
+    # its shared library is a capability marker assertable today. That check is
+    # hardware-independent, so it is the part that gates the build.
+    #
+    # vainfo is NOT absent: libva-utils ships /usr/bin/vainfo and is part of the
+    # installed Bluefin contract (packages/bluefin.toml, [fedora]), and the
+    # factory publishes libva-utils-2.24.0-2.hum1.bfin. But initialising a
+    # VA-API driver needs a DRM render node, and an image build has no /dev/dri,
+    # so vainfo always exits non-zero here regardless of whether the RPM
+    # transaction was correct. Report the probe, never fail the build on it --
+    # hardware capability belongs to a post-boot check, not to a build step.
     if not (glob.glob("/usr/lib64/libva.so*") or glob.glob("/usr/lib/libva.so*")):
         failures.append("libva shared library not present")
-    vainfo = shutil.which("vainfo")
-    if vainfo:
+    if shutil.which("vainfo"):
         out = subprocess.run(["vainfo"], capture_output=True, text=True, check=False)
         probe = (out.stdout + out.stderr).lower()
         if out.returncode != 0 or "no driver" in probe or "error" in probe:
-            failures.append("vainfo could not initialise a VA-API driver")
+            print(
+                "NOTE: vainfo could not initialise a VA-API driver here; an "
+                "image build has no render device, so this is expected and is "
+                "not a contract failure"
+            )
+        else:
+            print("vainfo initialised a VA-API driver")
     else:
-        print(
-            "NOTE: vainfo not yet published by the factory; VA-API capability "
-            "asserted here once the media driver and vaapi-utils ship"
-        )
+        print("NOTE: vainfo not installed; VA-API capability not probed")
 
     if failures:
         print("multimedia contract failed:", *failures, sep="\n  ", file=sys.stderr)
