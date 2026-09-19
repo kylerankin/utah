@@ -1,6 +1,7 @@
 """CI must test the complete exact-digest set before publication."""
 import importlib.util
 import json
+import os
 import subprocess
 from pathlib import Path
 import tempfile
@@ -117,10 +118,12 @@ class EvidenceTests(unittest.TestCase):
             "OUTPUT_ISO=/tmp/utah-fakeiso\n"
             + guard
         )
-        under = {"ISO_MAX_GB": "8", "DU_BYTES": str(7 * 1024 ** 3), "DU_HUMAN": "7.0G"}
+        under = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                 "ISO_MAX_GB": "8", "DU_BYTES": str(7 * 1024 ** 3), "DU_HUMAN": "7.0G"}
         result = subprocess.run(["bash", "-eu", "-c", run], capture_output=True, text=True, env=under)
         self.assertEqual(result.returncode, 0, result.stderr)
-        over = {"ISO_MAX_GB": "8", "DU_BYTES": str(8 * 1024 ** 3 + 512 * 1024 ** 2), "DU_HUMAN": "8.5G"}
+        over = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "ISO_MAX_GB": "8", "DU_BYTES": str(8 * 1024 ** 3 + 512 * 1024 ** 2), "DU_HUMAN": "8.5G"}
         result = subprocess.run(["bash", "-eu", "-c", run], capture_output=True, text=True, env=over)
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("exceeds 8 GB budget", result.stderr)

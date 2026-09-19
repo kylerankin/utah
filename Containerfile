@@ -202,7 +202,8 @@ RUN --mount=type=bind,from=packages,source=/repository,target=/etc/utah-packages
     # the committed image. Flip it disabled here -- the last step that installs
     # anything -- so later dnf calls on the image (the live ISO build's included)
     # do not fail on a file:// baseurl that no longer exists.
-    sed -i 's/^enabled=1$/enabled=0/' /etc/yum.repos.d/utah-packages.repo
+    sed -i 's/^enabled=1$/enabled=0/' /etc/yum.repos.d/utah-packages.repo \
+      && grep -q '^enabled=0$' /etc/yum.repos.d/utah-packages.repo
 
 # Everything above writes build-time residue that bootc lint rejects: dnf logs
 # under /var/log, cockpit and dnf state under /run, and ~45 /var directories
