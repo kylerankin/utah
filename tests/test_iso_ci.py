@@ -101,21 +101,26 @@ class EvidenceTests(unittest.TestCase):
         # drive both the byte count (-b) and the human size (-sh) without a
         # real ISO on disk -- the test exercises the logic, not a copy of it.
         script = (ROOT / "iso/scripts/build-iso.sh").read_text()
-        self.assertIn("ISO_MAX_GB", script)
-        self.assertIn("UTAH_ISO_MAX_GB", script)
+        # The guard must receive ISO_MAX_GB the way the real script delivers it:
+        # as a positional arg into the <<'ASSEMBLY' heredoc, not from the outer
+        # shell's environment. Assert that plumbing exists so a regression back
+        # to an unexported, unpassed variable (which dies under set -u inside
+        # the assembly) is caught here before it breaks every ISO build.
+        self.assertRegex(script, r"podman unshare bash -s -- .*\$\{ISO_MAX_GB\}")
+        self.assertIn('ISO_MAX_GB="$8"', script)
         start = script.index("iso_max_bytes=$(( ISO_MAX_GB")
         end = script.index("\nfi\n", start) + len("\nfi\n")
         guard = script[start:end]
         run = (
             "du() { if [ \"$1\" = \"-b\" ]; then echo \"$DU_BYTES\"; "
             "else echo \"$DU_HUMAN\"; fi; };\n"
-            "ISO_MAX_GB=${ISO_MAX_GB:-8}; OUTPUT_ISO=/tmp/utah-fakeiso\n"
+            "OUTPUT_ISO=/tmp/utah-fakeiso\n"
             + guard
         )
-        under = {"DU_BYTES": str(7 * 1024 ** 3), "DU_HUMAN": "7.0G"}
+        under = {"ISO_MAX_GB": "8", "DU_BYTES": str(7 * 1024 ** 3), "DU_HUMAN": "7.0G"}
         result = subprocess.run(["bash", "-eu", "-c", run], capture_output=True, text=True, env=under)
         self.assertEqual(result.returncode, 0, result.stderr)
-        over = {"DU_BYTES": str(8 * 1024 ** 3 + 512 * 1024 ** 2), "DU_HUMAN": "8.5G"}
+        over = {"ISO_MAX_GB": "8", "DU_BYTES": str(8 * 1024 ** 3 + 512 * 1024 ** 2), "DU_HUMAN": "8.5G"}
         result = subprocess.run(["bash", "-eu", "-c", run], capture_output=True, text=True, env=over)
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("exceeds 8 GB budget", result.stderr)

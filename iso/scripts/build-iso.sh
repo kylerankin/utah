@@ -57,7 +57,7 @@ podman build --layers \
 # Image mounts live in rootless Podman's user namespace. Keep the complete
 # mount/copy/assembly operation inside podman unshare rather than leaking a
 # namespace-private mount path back to the host shell.
-podman unshare bash -s -- "${LIVE_IMAGE}" "${IMAGE}" "${PUBLISHED_IMAGE}" "${OUTPUT_ISO}" "${TITLE}" "${LABEL}" "${WORK}" <<'ASSEMBLY'
+podman unshare bash -s -- "${LIVE_IMAGE}" "${IMAGE}" "${PUBLISHED_IMAGE}" "${OUTPUT_ISO}" "${TITLE}" "${LABEL}" "${WORK}" "${ISO_MAX_GB}" <<'ASSEMBLY'
 set -euo pipefail
 LIVE_IMAGE="$1"
 PAYLOAD_IMAGE="$2"
@@ -66,6 +66,7 @@ OUTPUT_ISO="$4"
 TITLE="$5"
 LABEL="$6"
 WORK="$7"
+ISO_MAX_GB="$8"
 MOUNT="$(podman image mount "${LIVE_IMAGE}")"
 cleanup() {
     set +e
