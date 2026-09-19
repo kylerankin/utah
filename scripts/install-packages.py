@@ -198,7 +198,7 @@ def main() -> int:
     # the pin is meant to prevent -- and the verifier skips [unavailable] names,
     # so this step would otherwise lock something it never asserts. Subtract the
     # [unavailable] set before computing what is actually installed.
-    unavailable = set(section(args.manifest, "unavailable"))
+    unavailable = set(section(overlay, "unavailable"))
     locked = installed([m for m in multimedia if m not in unavailable])
     if locked:
         print(f"Versionlocking {len(locked)} factory multimedia overrides: {' '.join(locked)}")
