@@ -159,8 +159,6 @@ class VersionlockTests(unittest.TestCase):
             try:
                 sys.argv = ["install-packages", str(base), str(overlay)]
                 with patch.object(installer, "run", fake_run), \
-                     patch.object(installer, "installed", return_sorted=[
-                         "mesa-vulkan-drivers", "libva-intel-media-driver"]), \
                      patch.object(installer, "dnf_path", return_value="dnf"), \
                      patch.object(installer, "fedora_major", return_value="43"), \
                      patch.object(installer, "installed",

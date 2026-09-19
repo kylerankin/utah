@@ -19,15 +19,20 @@ from __future__ import annotations
 
 import argparse
 import glob
+import re
 import shutil
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
-# The Hummingbird/factory release marker. A multimedia override whose installed
-# release does not carry this came from somewhere other than the factory.
-FACTORY_RELEASE_MARKER = "hum"
+# The factory release marker. A multimedia override whose installed release
+# does not carry `hum<N>.bfin` came from somewhere other than the factory.
+# A bare `hum` substring is too weak: the base/public-hummingbird repo ships
+# Hummingbird-disttag builds of the same names, so `hum` alone only proves
+# "built for Hummingbird", not "from the factory". The `.bfin` disttag is the
+# Bluefin-factory marker, so require the full `hum<N>.bfin` release form.
+FACTORY_RELEASE_RE = re.compile(r"hum\d+\.bfin\b")
 
 
 def section(path: Path, name: str) -> list[str]:
@@ -87,7 +92,12 @@ def vaapi_probe(
     else:
         result = runner(["vainfo"], capture_output=True, text=True, check=False)
         probe = (result.stdout + result.stderr).lower()
-        if result.returncode != 0 or "no driver" in probe or "error" in probe:
+        # Gate on the exit code plus an affirmative "no driver" signal. A bare
+        # "error" substring is too noisy: libva logs non-fatal `libva error:` and
+        # `error: can't connect to X server!` lines for a failed backend before a
+        # fallback driver initialises with exit 0, which would false-fail a
+        # working driver on real hardware (the render-node-present case only).
+        if result.returncode != 0 or "no driver" in probe:
             failures.append("vainfo could not initialise a VA-API driver")
         else:
             out("vainfo initialised a VA-API driver")
@@ -128,9 +138,9 @@ def main() -> int:
             failures.append(f"{pkg}: not installed")
             continue
         release = released(pkg)
-        if FACTORY_RELEASE_MARKER not in release:
+        if not FACTORY_RELEASE_RE.search(release):
             failures.append(
-                f"{pkg}: release {release!r} is not a factory (Hummingbird 'hum') build"
+                f"{pkg}: release {release!r} is not a factory (Hummingbird 'hum<N>.bfin') build"
             )
 
     failures += vaapi_probe()

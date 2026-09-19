@@ -91,6 +91,29 @@ class ProbeGatingTests(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertTrue(any("initialised a VA-API driver" in n for n in notes), notes)
 
+    def test_benign_error_lines_with_zero_exit_do_not_fail(self):
+        """libva logs non-fatal `error:` lines before a fallback driver
+        initialises with exit 0; that must not be read as a probe failure."""
+        failures, _ = probe(
+            runner=completed(0, "VAProfileH264Main", "error: can't connect to X server!")
+        )
+        self.assertEqual(failures, [])
+
+
+class FactoryReleaseTests(unittest.TestCase):
+    """The release marker must assert a factory (hum<N>.bfin) build, not just
+    any Hummingbird-disttag build -- the base/public-hummingbird repo ships the
+    same names with a `hum` disttag but without the `.bfin` factory marker."""
+
+    def test_factory_release_matches(self):
+        self.assertTrue(verify_multimedia.FACTORY_RELEASE_RE.search("2.24.1-1.hum1.bfin"))
+
+    def test_non_factory_release_rejected(self):
+        self.assertFalse(verify_multimedia.FACTORY_RELEASE_RE.search("2.24.0-2.fc39"))
+
+    def test_base_hummingbird_disttag_without_bfin_rejected(self):
+        self.assertFalse(verify_multimedia.FACTORY_RELEASE_RE.search("2.24.1-1.hum1.fc39"))
+
 
 if __name__ == "__main__":
     unittest.main()
