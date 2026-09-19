@@ -30,7 +30,7 @@ DNF="$(command -v dnf5 || command -v dnf)"
 # simple-framebuffer device, and DRM_SIMPLEDRM drives it: an unaccelerated but
 # real KMS device on any hardware, until a native driver takes over.
 required_config=(SCHED_CLASS_EXT NTSYNC ANDROID_BINDERFS
-                 OVERLAY_FS SQUASHFS SQUASHFS_ZSTD EROFS_FS
+                 OVERLAY_FS SQUASHFS SQUASHFS_ZSTD EROFS_FS BTRFS_FS
                  BLK_DEV_LOOP ISO9660_FS BLK_DEV_DM DM_SNAPSHOT DM_CRYPT
                  CRYPTO_XTS FUSE_FS FS_VERITY
                  SYSFB_SIMPLEFB DRM_SIMPLEDRM)
@@ -126,9 +126,10 @@ scripts/config --enable BPF_SYSCALL --enable BPF_JIT \
                --enable ANDROID_BINDER_IPC --enable ANDROID_BINDERFS \
                --enable NTSYNC
 scripts/config --module OVERLAY_FS --module SQUASHFS --enable SQUASHFS_ZSTD \
-               --module EROFS_FS --enable BLK_DEV_LOOP --enable ISO9660_FS \
-               --enable BLK_DEV_DM --module DM_SNAPSHOT --module DM_CRYPT \
-               --module CRYPTO_XTS --module FUSE_FS --enable FS_VERITY
+               --module EROFS_FS --module BTRFS_FS --enable BLK_DEV_LOOP \
+               --enable ISO9660_FS --enable BLK_DEV_DM --module DM_SNAPSHOT \
+               --module DM_CRYPT --module CRYPTO_XTS --module FUSE_FS \
+               --enable FS_VERITY
 # The firmware framebuffer as a KMS device (see required_config above), plus
 # the two paravirtual GPUs QEMU offers, so a VM gets a proper display rather
 # than the boot framebuffer. Native GPU drivers for real gaming hardware
