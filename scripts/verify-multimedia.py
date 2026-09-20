@@ -119,9 +119,11 @@ def main() -> int:
     unavailable = set(section(overlay, "unavailable"))
 
     if args.check:
-        assert overrides, "multimedia_overrides section is empty"
+        if not overrides:
+            raise ValueError("multimedia_overrides section is empty")
         dupes = sorted(p for p in overrides if overrides.count(p) > 1)
-        assert not dupes, f"multimedia_overrides contains duplicate names: {dupes}"
+        if dupes:
+            raise ValueError(f"multimedia_overrides contains duplicate names: {dupes}")
         available = sorted(p for p in overrides if p not in unavailable)
         pending = sorted(p for p in overrides if p in unavailable)
         print(

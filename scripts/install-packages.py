@@ -191,13 +191,6 @@ def main() -> int:
     # name still pending in the factory (tracked in [unavailable]) is not locked
     # into non-existence.
     multimedia = section(args.manifest, "multimedia_overrides")
-    # Only lock the overrides the factory actually shipped. A name still pending
-    # in the factory (tracked in [unavailable]) has no factory build to pin;
-    # locking it here holds whatever non-factory build the base or a downstream
-    # transaction pulled at the base version, which is exactly the silent swap
-    # the pin is meant to prevent -- and the verifier skips [unavailable] names,
-    # so this step would otherwise lock something it never asserts. Subtract the
-    # [unavailable] set before computing what is actually installed.
     unavailable = set(section(overlay, "unavailable"))
     locked = installed([m for m in multimedia if m not in unavailable])
     if locked:
