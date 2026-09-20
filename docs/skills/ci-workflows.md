@@ -35,14 +35,15 @@ each pinned to a SHA tagged `v1`:
 - `.github/workflows/post-testing-e2e.yml` -- successful non-PR testing builds
   explicitly dispatch this, or manually supply a successful testing build run ID.
 
-CI delegates builds, vulnerability reporting, SBOMs, keyless signatures,
+CI delegates builds, vulnerability reporting, keyless signatures,
 provenance, and caching to `projectbluefin/actions@v1` (originated
 as a `docs/building.md` design bullet; now lives in this skill).
 
-Note: rechunking is **not** delegated. Utah publishes only the testing stream,
-and the reusable workflow's testing-stream guard skips the rechunk (and SBOM)
-steps (#131), so Utah images are never rechunked -- the same claim this PR
-removes from `scripts/configure-services.sh`.
+Note: rechunking and SBOM generation are **not** delegated. Utah publishes only
+the testing stream, and the reusable workflow's testing-stream guard skips both
+the rechunk and the SBOM steps (#131), so Utah images are never rechunked and no
+SBOM is ever produced. `scripts/configure-services.sh` therefore does not claim
+the image is rechunked.
 
 ## contract: the cheap gate
 
