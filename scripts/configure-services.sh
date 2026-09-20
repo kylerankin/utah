@@ -37,9 +37,9 @@ disable_unit() {
 # Hummingbird intentionally does not ship every Bluefin integration package.
 # Not enabled: rechunker-group-fix.service. It exists to repair the
 # /usr/lib/{group,gshadow} damage left by the legacy rechunker
-# (hhd-dev/rechunk) when rebasing to an image built without it. Utah rechunks
-# with chunkah, through projectbluefin/actions' reusable-build, and has never
-# been through legacy-rechunk -- so there is nothing here for it to repair.
+# (hhd-dev/rechunk) when rebasing to an image built without it. Utah has never
+# run the legacy rechunker, so this repair is unnecessary for it -- but that is
+# not why the unit is removed.
 #
 # It is not merely useless, it breaks the boot. The unit orders itself both
 # After=local-fs.target and Before=systemd-sysusers.service, and local-fs
