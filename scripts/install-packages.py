@@ -86,6 +86,20 @@ def run(*args: str) -> int:
     return subprocess.run(args, check=False).returncode
 
 
+def has_versionlock(dnf: str) -> bool:
+    """Whether this dnf understands `versionlock`.
+
+    `dnf5 versionlock --help` is a no-op that exits 0 when the command is
+    resolvable and nonzero when it is not, so it answers the question without
+    touching the rpmdb or the network.
+    """
+    out = subprocess.run(
+        [dnf, "versionlock", "--help"],
+        capture_output=True, text=True, check=False,
+    )
+    return out.returncode == 0
+
+
 def installed(packages: list[str]) -> list[str]:
     if not packages:
         return []
@@ -190,10 +204,26 @@ def main() -> int:
     # mirrors it. Only overrides the factory actually shipped are locked, so a
     # name still pending in the factory (tracked in [unavailable]) is not locked
     # into non-existence.
+    #
+    # `versionlock` needs no extra package on this base: Hummingbird's dnf5
+    # (5.4.0.0-4.1.hum1 in public-hummingbird-x86_64-rpms) carries the command
+    # itself -- the RPM declares `Provides: dnf5-command(versionlock)`, unlike
+    # reposync/config-manager and friends which live in dnf5-plugins. So nothing
+    # is added to the transaction for it. The guard below exists because that is
+    # a property of the pinned base, not a guarantee: if the base ever drops the
+    # command, the build must say so instead of failing inside dnf's argument
+    # parser.
     multimedia = section(args.manifest, "multimedia_overrides")
     unavailable = set(section(overlay, "unavailable"))
     locked = installed([m for m in multimedia if m not in unavailable])
     if locked:
+        if not has_versionlock(dnf):
+            print("ERROR: this base provides no `versionlock` command, so the "
+                  "factory multimedia overrides cannot be pinned. dnf5 ships it "
+                  "built in (Provides: dnf5-command(versionlock)); on a dnf4 "
+                  "base it comes from python3-dnf-plugins-extras-versionlock. "
+                  "Add the provider to the transaction or drop the pin.")
+            return 1
         print(f"Versionlocking {len(locked)} factory multimedia overrides: {' '.join(locked)}")
         rc = run(dnf, "-y", "versionlock", "add", *locked)
         if rc:

@@ -161,6 +161,7 @@ class VersionlockTests(unittest.TestCase):
                 with patch.object(installer, "run", fake_run), \
                      patch.object(installer, "dnf_path", return_value="dnf"), \
                      patch.object(installer, "fedora_major", return_value="43"), \
+                     patch.object(installer, "has_versionlock", return_value=True), \
                      patch.object(installer, "installed",
                                   side_effect=lambda pkgs: sorted(set(pkgs))): \
                     self.assertEqual(installer.main(), 0)
@@ -173,6 +174,51 @@ class VersionlockTests(unittest.TestCase):
         self.assertIn("add", locked)
         self.assertIn("mesa-vulkan-drivers", locked)
         self.assertNotIn("libva-intel-media-driver", locked)
+
+    def test_missing_versionlock_command_fails_loudly(self):
+        # The pin is only as good as the command behind it. Hummingbird's dnf5
+        # provides `dnf5-command(versionlock)` itself, but if a future base
+        # drops it the build must stop with an actionable message rather than
+        # shipping an image whose factory overrides are silently unpinned.
+        calls = []
+
+        def fake_run(*args):
+            calls.append(args)
+            return 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "bluefin.toml"
+            overlay = Path(tmp) / "utah.toml"
+            base.write_text(
+                '[multimedia_overrides]\npackages=["intel-gmmlib"]\n'
+            )
+            overlay.write_text("")
+            argv = sys.argv
+            try:
+                sys.argv = ["install-packages", str(base), str(overlay)]
+                with patch.object(installer, "run", fake_run), \
+                     patch.object(installer, "dnf_path", return_value="dnf"), \
+                     patch.object(installer, "fedora_major", return_value="43"), \
+                     patch.object(installer, "has_versionlock", return_value=False), \
+                     patch.object(installer, "installed",
+                                  side_effect=lambda pkgs: sorted(set(pkgs))):
+                    self.assertEqual(installer.main(), 1)
+            finally:
+                sys.argv = argv
+
+        self.assertEqual([c for c in calls if "versionlock" in c], [])
+
+    def test_has_versionlock_probes_the_command(self):
+        # The probe must ask dnf itself, and must not mistake a nonzero exit
+        # (unknown command) for an available one.
+        with patch.object(installer.subprocess, "run") as fake:
+            fake.return_value = subprocess.CompletedProcess([], 0, "", "")
+            self.assertTrue(installer.has_versionlock("dnf5"))
+            self.assertEqual(
+                list(fake.call_args.args[0]), ["dnf5", "versionlock", "--help"]
+            )
+            fake.return_value = subprocess.CompletedProcess([], 1, "", "")
+            self.assertFalse(installer.has_versionlock("dnf5"))
 
 
 if __name__ == "__main__":

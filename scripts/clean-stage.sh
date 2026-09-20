@@ -3,9 +3,26 @@
 #
 # This mirrors the filesystem portion of Bluefin's
 # build_files/shared/clean-stage.sh, deliberately: Utah keeps Bluefin's package
-# contract, so it inherits Bluefin's image hygiene too. Bluefin's script also
-# disables flatpak-add-fedora-repos.service and clears a dnf5 versionlock,
-# neither of which exists here.
+# contract, so it inherits Bluefin's image hygiene too. Two things Bluefin's
+# script does are left out on purpose:
+#
+#   flatpak-add-fedora-repos.service  does not exist on this base.
+#   dnf5 versionlock clearing         Utah keeps its lock. Bluefin runs
+#                                     `dnf versionlock clear` under "Revert
+#                                     back to upstream defaults", alongside
+#                                     resetting keepcache. Utah does not:
+#                                     install-packages.py pins the factory
+#                                     multimedia overrides (intel-gmmlib,
+#                                     intel-mediasdk, intel-vpl-gpu-rt, libheif,
+#                                     libva) with `dnf5 versionlock add`, and
+#                                     that pin is meant to survive into the
+#                                     shipped image, so a later transaction on
+#                                     the running system cannot swap a factory
+#                                     build for Fedora's. Clearing it here would
+#                                     drop the guarantee packages/utah.toml
+#                                     documents and scripts/verify-multimedia.py
+#                                     asserts. This is a deliberate divergence
+#                                     from Bluefin, not an omission.
 #
 # The three lint checks this satisfies, all seen failing on a real build:
 #
