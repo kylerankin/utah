@@ -36,8 +36,13 @@ each pinned to a SHA tagged `v1`:
   explicitly dispatch this, or manually supply a successful testing build run ID.
 
 CI delegates builds, vulnerability reporting, SBOMs, keyless signatures,
-provenance, caching, and rechunking to `projectbluefin/actions@v1` (originated
+provenance, and caching to `projectbluefin/actions@v1` (originated
 as a `docs/building.md` design bullet; now lives in this skill).
+
+Note: rechunking is **not** delegated. Utah publishes only the testing stream,
+and the reusable workflow's testing-stream guard skips the rechunk (and SBOM)
+steps (#131), so Utah images are never rechunked -- the same claim this PR
+removes from `scripts/configure-services.sh`.
 
 ## contract: the cheap gate
 
