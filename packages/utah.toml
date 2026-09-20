@@ -268,8 +268,8 @@ packages = [
 # available. Measured from its metadata rather than guessed: the cuda-toolkit
 # closure is 65 packages, 3.97 GB to download and 7.68 GB installed. This image
 # is a few GB, so that multiplies it, in every pull and every layer, and it has
-# to survive an OCI export and a rechunk on a runner that already needed disk
-# freed for the kernel build.
+# to be built and pushed from a runner that already needed disk freed for the
+# kernel build.
 #
 # The full `cuda` metapackage is worse and is not even installable here: it
 # requires kmod-nvidia-open-dkms, nvidia-driver-libs, nvidia-driver-common and
