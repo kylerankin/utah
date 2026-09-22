@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-19",
+  "generated_at": "2026-09-22",
   "generator": "scripts/generate-site-data.py",
   "groups": [
     {
@@ -34,6 +34,9 @@
         "ibus-unikey",
         "igt-gpu-tools",
         "input-remapper",
+        "intel-gmmlib",
+        "intel-mediasdk",
+        "intel-vpl-gpu-rt",
         "isomd5sum",
         "just",
         "libappindicator-gtk3",
@@ -44,7 +47,9 @@
         "libblockdev-mpath",
         "libcamera-gstreamer",
         "libcamera-tools",
+        "libheif",
         "libratbag-ratbagd",
+        "libva",
         "libva-utils",
         "libxcrypt-compat",
         "livesys-scripts",
@@ -151,8 +156,8 @@
     }
   ],
   "totals": {
-    "installed": 102,
-    "unavailable": 9
+    "installed": 107,
+    "unavailable": 16
   },
   "unavailable": [
     {
@@ -186,6 +191,34 @@
         106
       ],
       "name": "libgda-sqlite"
+    },
+    {
+      "issues": [],
+      "name": "libva-intel-media-driver"
+    },
+    {
+      "issues": [],
+      "name": "mesa-dri-drivers"
+    },
+    {
+      "issues": [],
+      "name": "mesa-filesystem"
+    },
+    {
+      "issues": [],
+      "name": "mesa-libEGL"
+    },
+    {
+      "issues": [],
+      "name": "mesa-libGL"
+    },
+    {
+      "issues": [],
+      "name": "mesa-libgbm"
+    },
+    {
+      "issues": [],
+      "name": "mesa-vulkan-drivers"
     },
     {
       "issues": [
