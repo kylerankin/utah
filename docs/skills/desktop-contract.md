@@ -1,7 +1,7 @@
 ---
 name: desktop-contract
 version: "1.0"
-last_updated: "2026-09-16"
+last_updated: "2026-09-18"
 id: desktop-contract
 one_line_purpose: Maintain Utah identity, Bluefin desktop defaults, and first-boot Flatpak policy.
 entry_point: docs/skills/desktop-contract.md
@@ -55,17 +55,26 @@ The TOML's sections are the contract's table of contents:
   `99-flatpaks.sh` privileged-setup hook, and the system-flatpaks Brewfile
   whose app list the contract enumerates.
 - **`[services]`** — systemd units the preset must enable: `gdm.service`,
-  `ublue-system-setup.service`, `flatpak-preinstall.service`,
+  `bluetooth.service`, `ublue-system-setup.service`, `flatpak-preinstall.service`,
   `flatpak-nuke-fedora.service`, `brew-setup.service`, `dconf-update.service`,
-  `bootc-unified-storage.service`, `uupd.timer`.
+  `bootc-unified-storage.service`, `uupd.timer`. Update policy delegates
+  background updates to `uupd.timer`; `bootc-fetch-apply-updates.timer` and
+  `bootc-fetch-apply-updates.service` are masked in `/etc` and `/usr/lib` (and
+  disabled in `85-utah-desktop.preset`) so cross-vendor `/etc` 3-way merges
+  (e.g. switching from Bluefin) do not carry active `timers.target.wants`
+  symlinks that bypass uupd staging or undo manual rollbacks. Switchers can
+  also manually verify or mask them if a local `/etc` symlink was preserved.
 
 ## GNOME extensions are pinned submodules
 
 Bluefin's GNOME extension submodules are retained with their normal build
-step. `.gitmodules` pins nine of them by URL and branch under
+step. `.gitmodules` pins eight of them by URL and branch under
 `system_files/shared/usr/share/gnome-shell/extensions/` — appindicator,
 bazaar-integration, blur-my-shell, caffeine, custom-command-list,
-dash-to-dock, gradia-integration, gsconnect, and search-light.
+dash-to-dock, gradia-integration, and gsconnect. Search Light was dropped:
+its shader code calls `set_shader_source`, which GNOME 51 removed, so the
+extension errored at load and failed the ISO end-to-end test on every
+flavor.
 
 `scripts/verify-gnome-extensions.py` asserts every one declares GNOME 51 in
 its `metadata.json`. It runs in two modes from the same script:

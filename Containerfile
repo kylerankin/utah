@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=quay.io/hummingbird-community/bootc-os:latest@sha256:c5539f9ed4d93aab6bd41e4f5aef8ab83055f3f9e855a47b69fadb7420d0d1df
+ARG BASE_IMAGE=quay.io/hummingbird-community/bootc-os:latest@sha256:db1007fdcda076f2d7fd0e2adfe998141dd1908b8f66c732654f762c6a8b2728
 # The package factory publishes a complete, digest-addressable RPM repository.
 # Keep this pin in Utah so an image build is reproducible and can be reviewed
 # against the exact package set it consumes.
@@ -8,9 +8,9 @@ ARG PACKAGE_IMAGE_SHA=sha256:ca320b39b5f40bea9516f6f1c11e70d352c35f1c3d109b3aaf0
 # in containers-storage, where no registry digest is available.
 ARG PACKAGE_IMAGE_REF=${PACKAGE_IMAGE}@${PACKAGE_IMAGE_SHA}
 ARG COMMON_IMAGE=ghcr.io/projectbluefin/common
-ARG COMMON_IMAGE_SHA=sha256:fb943c87866292fb74eb74610e9cd08a1a91fe42e763e28473f3f57cf18f26a5
+ARG COMMON_IMAGE_SHA=sha256:507abcb5be69af93dcf351f69b03f4fbc08bba2eb8f58db62f8e5d0060b69b95
 ARG BREW_IMAGE=ghcr.io/ublue-os/brew
-ARG BREW_IMAGE_SHA=sha256:8f952ae54585db9f855a306ef365e13609ed7c7944b12b823ba7d5ce8e1a145b
+ARG BREW_IMAGE_SHA=sha256:60ada2d65891d8797beef49d8b43f2108519cbbaf04c9c7363e1a008677fcd35
 
 FROM ${COMMON_IMAGE}@${COMMON_IMAGE_SHA} AS common
 FROM ${BREW_IMAGE}@${BREW_IMAGE_SHA} AS brew
@@ -41,10 +41,19 @@ FROM ${BASE_IMAGE}
 # turn below them.
 COPY packages/bluefin.toml packages/utah.toml contracts/bluefin-desktop.toml /usr/share/utah/
 COPY packages/hummingbird.repo packages/nvidia-container.repo packages/utah-packages.repo /etc/yum.repos.d/
-# The package image is an RPM repository, not a runtime dependency. Its
-# contents are intentionally copied into the image so the package transaction
-# is reproducible and does not depend on a mutable Pages mirror.
-COPY --from=packages /repository /etc/utah-packages
+# Hummingbird signs its RPMs with Red Hat's release key 2 (fd431d51); the key
+# lets packages/hummingbird.repo run with gpgcheck=1 here and in the live ISO
+# build on top of this image.
+COPY packages/RPM-GPG-KEY-redhat-release-2 /etc/pki/rpm-gpg/
+# The package image is an RPM repository, not a runtime dependency. It is
+# bind mounted into the two RUN steps that install from it and never copied
+# into a layer: a COPY used to put the whole ~4 GB repository at
+# /etc/utah-packages, nothing ever removed it, and it was two thirds of every
+# published image and of every live ISO, whose squashfs holds the image (#128).
+# Reproducibility still comes from the digest-pinned `packages` stage, which is
+# the only source the package transaction can see -- that is what the old
+# comment meant by "does not depend on a mutable Pages mirror." The mount is a
+# BuildKit RUN --mount, so it costs no layer and leaves nothing on disk.
 # One layer for all of Utah's scripts. They are staged under /tmp and installed
 # by name in the RUN below, because a multi-source COPY cannot rename and
 # every downstream path expects the utah- prefix.
@@ -59,6 +68,7 @@ COPY scripts/install-packages.py \
      scripts/verify-desktop-contract.py \
      scripts/verify-gnome-extensions.py \
      scripts/verify-multimedia.py \
+     scripts/mirror-shim.sh \
      /tmp/utah-scripts/
 # Common publishes Bluefin artwork, desktop defaults, Brewfiles, and setup
 # hooks in a separate profile from its shared system files. Both are required:
@@ -80,14 +90,20 @@ RUN for pair in install-packages.py:utah-install-packages \
                 configure-branding.sh:utah-configure-branding \
                 verify-desktop-contract.py:utah-verify-desktop-contract \
                 verify-gnome-extensions.py:utah-verify-gnome-extensions \
-                verify-multimedia.py:utah-verify-multimedia; do \
+                verify-multimedia.py:utah-verify-multimedia \
+                mirror-shim.sh:utah-mirror-shim; do \
       install -Dm 0755 "/tmp/utah-scripts/${pair%%:*}" "/usr/local/libexec/${pair##*:}" || exit 1; \
     done && \
     cp -a /tmp/utah-common/. / && \
     cp -a /tmp/utah-bluefin/. / && \
     cp -a /tmp/utah-brew/. / && \
     cp -a /tmp/utah-local/. / && \
-    rm -rf /tmp/utah-scripts /tmp/utah-common /tmp/utah-bluefin /tmp/utah-brew /tmp/utah-local
+    rm -rf /tmp/utah-scripts /tmp/utah-common /tmp/utah-bluefin /tmp/utah-brew /tmp/utah-local && \
+    rm -f /etc/dconf/db/distro.d/05-bluefin-searchlight-extension
+# The last line drops Common's settings for the Search Light extension. Utah no
+# longer ships that extension: its shader code calls set_shader_source, which
+# GNOME 51 removed, so it errored at load and failed the ISO end-to-end test.
+# Settings for an extension the image does not carry are noise in dconf.
 
 # This first check covers the flavor-independent contract only, which is why it
 # pins IMAGE_FLAVOR=main. verify-rpm-contract.py reads IMAGE_FLAVOR from the
@@ -109,7 +125,8 @@ RUN for pair in install-packages.py:utah-install-packages \
 # The package lists live in the manifests, not here.  When they were spelled
 # out in this RUN as well, the two copies drifted and the contract check was
 # asserting a different set than the install had asked for.
-RUN /usr/local/libexec/utah-install-packages \
+RUN --mount=type=bind,from=packages,source=/repository,target=/etc/utah-packages,ro \
+    /usr/local/libexec/utah-install-packages \
       /usr/share/utah/bluefin.toml /usr/share/utah/utah.toml && \
     IMAGE_FLAVOR=main /usr/local/libexec/utah-verify-rpm-contract \
       /usr/share/utah/bluefin.toml /usr/share/utah/utah.toml && \
@@ -137,18 +154,22 @@ ARG ENABLE_SSHD=0
 # is otherwise unverified. Both move together, so Renovate updates both.
 ARG UUPD_VERSION=v1.4.0
 ARG UUPD_SHA256=c7463f193cd35b92cde2ee05496501d6ac13808899bd26e17e027b7ee9ee1acc
+# The two systemd units come from raw.githubusercontent at the same tag, and a
+# git tag move changes what raw.* serves for them without touching the release
+# asset the checksum above covers. uupd.service runs as root on a timer, so
+# verify the units against their own digests too; all four ARGs move together.
+ARG UUPD_SERVICE_SHA256=65dd2b64dcb6a9f77227612aa624ef17fe43b32eb835b51d7d22a22755dc21a8
+ARG UUPD_TIMER_SHA256=bbb5f098ec33d047bdef571e0bc112364df157e0f92d73e0febab703c4a3c099
 
 # Hummingbird defaults to a server preset and disables unlisted services.
 # configure-services is the Utah equivalent of bluefin-lts's 40-services.sh:
 # it applies the desktop service policy, login defaults, update policy, and
 # removes the extension build toolchain before the final cleanup.
 #
-# The shim mirroring at the end belongs to the same step. Fedora's shim package
-# stages its EFI payload under bootupd's update tree, while bootupd discovers
-# image-provided EFI components under /usr/lib/efi. Mirroring the signed
-# payload into bootupd's component layout lets bootc create a generic disk
-# image without depending on the build host's ESP. It was a layer of its own
-# and cost forty seconds to commit a few megabytes.
+# The shim mirroring at the end belongs to the same step: it was a layer of its
+# own and cost forty seconds to commit a few megabytes. It lives in
+# scripts/mirror-shim.sh rather than inline, because as a bare && chain a
+# failure printed nothing at all -- see the comment at the top of that script.
 RUN mkdir -p /tmp/uupd && \
     curl -fsSL "https://github.com/ublue-os/uupd/releases/download/${UUPD_VERSION}/uupd_Linux_x86_64.tar.gz" \
       -o /tmp/uupd/uupd_Linux_x86_64.tar.gz && \
@@ -158,20 +179,20 @@ RUN mkdir -p /tmp/uupd && \
       -o /tmp/uupd/uupd.service && \
     curl -fsSL "https://raw.githubusercontent.com/ublue-os/uupd/${UUPD_VERSION}/uupd.timer" \
       -o /tmp/uupd/uupd.timer && \
+    echo "${UUPD_SERVICE_SHA256}  /tmp/uupd/uupd.service" | sha256sum --check --strict && \
+    echo "${UUPD_TIMER_SHA256}  /tmp/uupd/uupd.timer" | sha256sum --check --strict && \
     /usr/local/libexec/utah-build-gnome-extensions && \
     /usr/local/libexec/utah-verify-gnome-extensions && \
     glib-compile-schemas /usr/share/glib-2.0/schemas && \
     ENABLE_SSHD="${ENABLE_SSHD}" /usr/local/libexec/utah-configure-services && \
     /usr/local/libexec/utah-configure-branding && \
     /usr/local/libexec/utah-verify-desktop-contract /usr/share/utah/bluefin-desktop.toml && \
-    shim_version="$(rpm -q --qf '%{VERSION}-%{RELEASE}' shim-x64)" && \
-    test -d /usr/lib/bootupd/updates/EFI/fedora && \
-    install -d "/usr/lib/efi/shim/${shim_version}/EFI/fedora" && \
-    cp -a /usr/lib/bootupd/updates/EFI/fedora/. "/usr/lib/efi/shim/${shim_version}/EFI/fedora/"
+    /usr/local/libexec/utah-mirror-shim
 
 # Dakota-compatible flavors: OGC is built and asserted before NVIDIA so the
 # NVIDIA path can bind its module to the exact kernel tree it will boot.
-RUN case "${IMAGE_FLAVOR}" in \
+RUN --mount=type=bind,from=packages,source=/repository,target=/etc/utah-packages,ro \
+    case "${IMAGE_FLAVOR}" in \
       gaming|nvidia-gaming) /usr/local/libexec/utah-install-ogc-kernel ;; \
       main|nvidia) ;; \
       *) echo "Unknown Utah image flavor: ${IMAGE_FLAVOR}" >&2; exit 2 ;; \
@@ -181,7 +202,13 @@ RUN case "${IMAGE_FLAVOR}" in \
       main|gaming) ;; \
     esac && \
     IMAGE_FLAVOR="${IMAGE_FLAVOR}" /usr/local/libexec/utah-verify-rpm-contract \
-      /usr/share/utah/bluefin.toml /usr/share/utah/utah.toml
+      /usr/share/utah/bluefin.toml /usr/share/utah/utah.toml && \
+    # The package repository is now only ever bind mounted, so it is absent from
+    # the committed image. Flip it disabled here -- the last step that installs
+    # anything -- so later dnf calls on the image (the live ISO build's included)
+    # do not fail on a file:// baseurl that no longer exists.
+    sed -i 's/^enabled=1$/enabled=0/' /etc/yum.repos.d/utah-packages.repo \
+      && grep -q '^enabled=0$' /etc/yum.repos.d/utah-packages.repo
 
 # Everything above writes build-time residue that bootc lint rejects: dnf logs
 # under /var/log, cockpit and dnf state under /run, and ~45 /var directories

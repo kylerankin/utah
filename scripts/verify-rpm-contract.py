@@ -61,19 +61,24 @@ def main() -> int:
     if resolved.exists():
         contract = [line for line in resolved.read_text().split() if line]
         gnome_names = set(section(overlay, "gnome"))
+        parity_names = set(section(overlay, "parity"))
         service_names = set(section(overlay, "services"))
-        bluefin = [p for p in contract if p not in gnome_names and p not in service_names]
+        overlay_names = gnome_names | parity_names | service_names
+        bluefin = [p for p in contract if p not in overlay_names]
         gnome = [p for p in contract if p in gnome_names]
+        parity = [p for p in contract if p in parity_names]
         services = [p for p in contract if p in service_names]
     else:
         bluefin = [p for p in section(args.manifest, "fedora") if p not in unavailable]
         gnome = section(overlay, "gnome")
+        parity = section(overlay, "parity")
         services = section(overlay, "services")
     nvidia = list(NVIDIA_PACKAGES) if "nvidia" in flavor else []
-    expected = [*bluefin, *gnome, *services, *nvidia]
+    expected = [*bluefin, *gnome, *parity, *services, *nvidia]
 
     print(
         f"Verifying {len(bluefin)} Bluefin packages, {len(gnome)} GNOME desktop packages,"
+        f" {len(parity)} parity packages,"
         f" {len(services)} desktop service packages, and {len(nvidia)} NVIDIA packages",
         flush=True,
     )
@@ -107,7 +112,7 @@ def main() -> int:
     # release string and then report a missing module for a kernel of that name.
     base = subprocess.run(["rpm", "-q", "kernel", "--qf", "%{VERSION}-%{RELEASE}.%{ARCH}\n"],
                           capture_output=True, text=True).stdout.split()
-    base = base[-1] if base else ""
+    base = base[-1].strip() if base else ""
     # Identify the kernel by its module tree, not by a build tree. A build tree
     # only exists while kernel-devel is installed, and install-nvidia.sh removes
     # that again once the module is compiled -- 215 MiB there is no reason to
@@ -115,7 +120,7 @@ def main() -> int:
     # flavors only satisfied it because install-ogc-kernel.sh leaves its own
     # tree behind. A module tree is what says the image can boot that kernel,
     # which is the thing being asserted.
-    if not Path(f"/usr/lib/modules/{base}").is_dir():
+    if not base or not Path(f"/usr/lib/modules/{base}").is_dir():
         candidates = sorted(d.name for d in Path("/usr/lib/modules").glob("*")
                             if d.name != ogc_release and d.is_dir())
         if not candidates:
@@ -130,6 +135,12 @@ def main() -> int:
 
     failed = False
     for release in releases:
+        release = release.strip() if release else ""
+        if not release:
+            print("ERROR: empty kernel release; no kernel to check NVIDIA module against",
+                  file=sys.stderr)
+            failed = True
+            continue
         module = Path(f"/usr/lib/modules/{release}/extra/nvidia/nvidia.ko")
         if not module.exists():
             print(f"ERROR: NVIDIA module missing for kernel {release}", file=sys.stderr)

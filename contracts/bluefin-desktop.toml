@@ -53,7 +53,6 @@ files = [
   "/etc/dconf/db/distro.d/02-bluefin-keybindings",
   "/etc/dconf/db/distro.d/03-bluefin-ptyxis-palette",
   "/etc/dconf/db/distro.d/04-bluefin-custom-command-menu",
-  "/etc/dconf/db/distro.d/05-bluefin-searchlight-extension",
   "/etc/dconf/db/distro.d/locks/01-bluefin-locked-settings",
 ]
 
@@ -131,6 +130,7 @@ apps = [
 
 [services]
 enabled = [
+  "bluetooth.service",
   "bootc-unified-storage.service",
   "brew-setup.service",
   "dconf-update.service",
@@ -139,4 +139,8 @@ enabled = [
   "gdm.service",
   "ublue-system-setup.service",
   "uupd.timer",
+]
+masked = [
+  "bootc-fetch-apply-updates.service",
+  "bootc-fetch-apply-updates.timer",
 ]

@@ -7,6 +7,7 @@
 #
 # Sections:
 #   [gnome]        GNOME 51 desktop contract Hummingbird does not ship
+#   [parity]       what Bluefin gets from Fedora's base image and Hummingbird has
 #   [build]        toolchain needed to build the pinned GNOME extensions
 #   [unavailable]  Bluefin contract packages none of Utah's repositories provide
 #
@@ -52,6 +53,86 @@ packages = [
     "mutter",
     "xdg-desktop-portal",
     "xdg-desktop-portal-gnome",
+    # Locale data. Hummingbird's base carries only glibc-minimal-langpack,
+    # which provides C and C.UTF-8 and nothing else, so any LANG or LC_*
+    # value a user sets -- through gnome-control-center, localectl, or a
+    # /etc/locale.conf carried over from another install -- names a locale
+    # that does not exist. Every setlocale() then warns, on every command
+    # (#114). /etc/profile.d/lang.sh is meant to fall back to C.UTF-8 but
+    # its reset is clobbered by its own locale.conf re-export, so the noise
+    # is unrecoverable from inside the image. Bluefin's Silverblue base
+    # ships glibc-all-langpacks; matching it is what makes Region & Language
+    # a working control rather than a way to break the terminal.
+    "glibc-all-langpacks",
+]
+
+[parity]
+# Packages Bluefin's image carries without naming them in bluefin.toml, because
+# Fedora's Silverblue base supplies them, and which Hummingbird's repository
+# has but its server-shaped bootable base leaves out. Measured, not guessed:
+# the image-level parity report (#117, scripts/check-image-parity.py) listed
+# 277 such names against public-hummingbird-x86_64-rpms. CI's "Check package
+# availability" step resolves the real transaction against the pinned images,
+# and is the gate on every name here; a first-level Requires check is not
+# enough, as the three ModemManager-shaped exclusions below proved.
+# Aligned with Dakota where it ships the same piece: the connectivity check,
+# ALSA use-case profiles, the language pack and the core font set.
+#
+# Left out, with the dependency the pinned repositories do not carry:
+#   NetworkManager-wwan        requires ModemManager, whose factory build
+#                              needs libmbim, libqmi and libqrtr-glib that
+#                              nothing provides -- a factory gap
+#   NetworkManager-bluetooth   requires libnm-wwan.so from the wwan plugin,
+#                              so it falls with it
+#   poppler-utils              Hummingbird's poppler requires poppler-data,
+#                              which Hummingbird does not ship
+#   cups, cups-client          need cups-filters (utah-packages#144)
+#   vim-enhanced               needs libgpm.so.2 (vim-minimal is in the base)
+#   default-fonts-core-emoji   needs google-noto-emoji-color-fonts
+#   default-fonts-core-math    needs stix-fonts (both utah-packages#147)
+#   fprintd, fprintd-pam       in no repository (utah-packages#145)
+#   alsa-utils                 in no repository (utah-packages#146)
+#
+# NetworkManager-wifi is deliberately not here yet: its supplicant and the
+# regulatory database are being built by utah-packages#133, and it joins this
+# list when the factory image that carries them is pinned (#126).
+#
+# unzip is also in [build]; it is listed here because configure-services.sh
+# removes the build tooling after the extension build, and Bluefin ships
+# unzip to users. The removal line skips it for that reason.
+packages = [
+    # Networking
+    "NetworkManager-config-connectivity-fedora",
+    "bind-utils",
+    "iptables-nft",
+    # Audio
+    "alsa-ucm",
+    # Locale and fonts
+    "langpacks-en",
+    "langpacks-fonts-en",
+    "abattis-cantarell-fonts",
+    "default-fonts-core-sans",
+    "default-fonts-core-serif",
+    "default-fonts-core-mono",
+    "google-noto-sans-mono-vf-fonts",
+    "google-noto-serif-vf-fonts",
+    "google-noto-sans-symbols-2-fonts",
+    "google-noto-sans-math-fonts",
+    # Shell and tooling Bluefin users reach for
+    "bash-completion",
+    "man-db",
+    "less",
+    "which",
+    "file",
+    "hostname",
+    "xxd",
+    "unzip",
+    "zip",
+    "dbus-tools",
+    "keyutils",
+    "crypto-policies-scripts",
+    "python3-pip",
+    "systemd-container",
 ]
 
 [build]
@@ -106,12 +187,16 @@ packages = [
 # dumping ground for packages that are merely inconvenient.
 #
 # evolution-ews-core
+#
 #   The Exchange Web Services plugin for Evolution (fedora_v43 section of
-#   the Bluefin manifest). Building it requires the entire
-#   evolution-data-server stack -- camel, evolution-mail, evolution-shell,
-#   libebook, libecal, libedata-book -- which the factory does not yet build.
-#   Disproportionate cost for one Exchange plugin binary; the EDS closure can
-#   be added to the factory if Exchange support is ever required.
+#   the Bluefin manifest). Building it requires both the evolution-data-server
+#   stack -- camel, libebook, libecal, libedata-book -- and Evolution itself,
+#   which is where evolution-mail and evolution-shell come from.
+#   utah-packages now builds evolution-data-server (3.61.3), so the EDS half of
+#   that closure is covered. The remaining gap is two recipes the factory does
+#   not have: evolution, and evolution-ews itself. Move this entry out of
+#   [unavailable] into the contract once utah-packages builds both; tracked by
+#   #10.
 #
 # fish
 #   Fedora's fish spec uses %cargo_generate_buildrequires, which requires
@@ -140,20 +225,21 @@ packages = [
 #   until that path is supported; tracked by #83.
 #
 # libgda, libgda-sqlite
-#   Runtime dependencies of the maintained Copyous extension, added upstream
-#   in projectbluefin/bluefin#1210. Neither name exists in the pinned factory
-#   image or in public-hummingbird-x86_64-rpms, and Hummingbird carries no
-#   package whose name contains "gda" at all. Both come from one SRPM --
-#   libgda-sqlite is the %package sqlite subpackage of Fedora's libgda.spec --
-#   so a single factory recipe with the sqlite provider enabled yields both.
-#   Tracked by #106.
+#   Upstream added both as runtime dependencies for the maintained Copyous
+#   extension (bluefin#1210). Neither is in the pinned factory image or in
+#   public-hummingbird-x86_64-rpms -- Hummingbird carries no package whose
+#   name contains gda at all. One factory recipe would cover both, because
+#   libgda-sqlite is a subpackage of the libgda SRPM rather than its own
+#   source. Tracked by #106.
 #
 # ppp
-#   Absent from both repositories, and nothing in either Provides: ppp, so no
-#   alternate name satisfies it. This also leaves Hummingbird's own
-#   NetworkManager-ppp uninstallable, since its metadata Requires: ppp --
-#   NetworkManager's PPPoE, PPTP and mobile-broadband paths cannot be
-#   installed at all rather than merely being absent. Tracked by #107.
+#   In neither repository, and nothing in either Provides it. This one costs
+#   more than dial-up: Hummingbird ships NetworkManager-ppp (1.58.0-1.hum1
+#   and 1.58.1-1.hum1) whose metadata carries Requires: ppp, so that plugin
+#   is uninstallable from their own repository and NetworkManager's PPPoE and
+#   PPTP paths cannot be installed at all. The same shape as avahi (#104) and
+#   nautilus (#100): a plugin shipped without the daemon behind it.
+#   Tracked by #107.
 #
 # grub2-efi-x64-cdboot and pipewire-libs-extra are supplied by the pinned
 # September 10 factory candidate and return to the install contract (#35).

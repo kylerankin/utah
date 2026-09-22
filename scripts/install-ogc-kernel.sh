@@ -19,10 +19,37 @@ DNF="$(command -v dnf5 || command -v dnf)"
 # dracut's dmsquash-live requires overlayfs and reads a zstd squashfs through
 # a loop device. Installed OSTree roots and the LUKS ISO test need the other
 # filesystem/device-mapper features too; x86 defconfig is not a live-OS config.
+#
+# A display, too. x86_64 defconfig turns on DRM and i915 and nothing else, so
+# on any machine whose GPU is not an Intel iGPU -- every QEMU guest included --
+# the kernel registered no DRM device at all. GDM started, mutter found no KMS
+# device to open, and the gaming flavors failed the ISO end-to-end test on a
+# black screen with "no gnome-shell running for liveuser", while main, on the
+# distribution kernel, came up through simpledrm on the firmware framebuffer.
+# SYSFB_SIMPLEFB makes sysfb hand the EFI/VESA framebuffer to a
+# simple-framebuffer device, and DRM_SIMPLEDRM drives it: an unaccelerated but
+# real KMS device on any hardware, until a native driver takes over.
+#
+# The root filesystem, too. Utah installs to btrfs on LUKS, and x86_64
+# defconfig has no BTRFS_FS, so the gaming flavors could format a root
+# volume and then not mount it. The installer got all the way to
+#
+#     mkfs.btrfs -f -L root /dev/mapper/fisherman-root     (ok)
+#     mount -t btrfs /dev/mapper/fisherman-root /mnt/fisherman-target
+#     mount: unknown filesystem type 'btrfs'
+#     fisherman: fatal: mounting root: ... exit status 32
+#
+# and the ISO test failed at phase 3 on both gaming flavors. It had never
+# reached that phase before: the missing KMS device below stopped it at
+# phase 2, so this list was written for the live-boot and LUKS paths and
+# nobody had yet needed the filesystem the disk is actually made of.
+# BTRFS_FS selects its own crc, zlib, lzo, zstd, raid6 and xor helpers, so
+# naming it is enough for olddefconfig to pull the rest in.
 required_config=(SCHED_CLASS_EXT NTSYNC ANDROID_BINDERFS
-                 OVERLAY_FS SQUASHFS SQUASHFS_ZSTD EROFS_FS
+                 OVERLAY_FS SQUASHFS SQUASHFS_ZSTD EROFS_FS BTRFS_FS
                  BLK_DEV_LOOP ISO9660_FS BLK_DEV_DM DM_SNAPSHOT DM_CRYPT
-                 CRYPTO_XTS FUSE_FS FS_VERITY)
+                 CRYPTO_XTS FUSE_FS FS_VERITY
+                 SYSFB_SIMPLEFB DRM_SIMPLEDRM)
 verify_config() {
   local config="$1" symbol
   for symbol in "${required_config[@]}"; do
@@ -115,9 +142,18 @@ scripts/config --enable BPF_SYSCALL --enable BPF_JIT \
                --enable ANDROID_BINDER_IPC --enable ANDROID_BINDERFS \
                --enable NTSYNC
 scripts/config --module OVERLAY_FS --module SQUASHFS --enable SQUASHFS_ZSTD \
-               --module EROFS_FS --enable BLK_DEV_LOOP --enable ISO9660_FS \
-               --enable BLK_DEV_DM --module DM_SNAPSHOT --module DM_CRYPT \
-               --module CRYPTO_XTS --module FUSE_FS --enable FS_VERITY
+               --module EROFS_FS --module BTRFS_FS --enable BLK_DEV_LOOP \
+               --enable ISO9660_FS --enable BLK_DEV_DM --module DM_SNAPSHOT \
+               --module DM_CRYPT --module CRYPTO_XTS --module FUSE_FS \
+               --enable FS_VERITY
+# The firmware framebuffer as a KMS device (see required_config above), plus
+# the two paravirtual GPUs QEMU offers, so a VM gets a proper display rather
+# than the boot framebuffer. Native GPU drivers for real gaming hardware
+# (amdgpu, xe) are a separate decision: they need linux-firmware in the image,
+# which the install set does not carry yet (projectbluefin/utah#97).
+scripts/config --enable SYSFB --enable SYSFB_SIMPLEFB \
+               --enable DRM --enable DRM_SIMPLEDRM \
+               --module DRM_VIRTIO_GPU --module DRM_BOCHS
 scripts/config --set-str LOCALVERSION "-ogc1" --disable LOCALVERSION_AUTO
 make olddefconfig
 
@@ -137,6 +173,7 @@ require_config() {
 require_config '^CONFIG_SCHED_CLASS_EXT=y$' CONFIG_SCHED_CLASS_EXT
 require_config '^CONFIG_NTSYNC=(y|m)$' CONFIG_NTSYNC
 require_config '^CONFIG_ANDROID_BINDERFS=y$' CONFIG_ANDROID_BINDERFS
+require_config '^CONFIG_DRM_SIMPLEDRM=y$' CONFIG_DRM_SIMPLEDRM
 verify_config .config
 
 make modules_prepare

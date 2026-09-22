@@ -28,11 +28,12 @@ policy for changing them.
 ## The two manifests
 
 - **`packages/bluefin.toml`** — the parity contract. It is a byte-for-byte
-  copy of projectbluefin/bluefin's `build_files/packages/base.toml` and must
-  stay that way. **Never hand-edit it.** Sync it verbatim from upstream; any
-  drift is a parity bug. `just check-parity` diffs it against upstream on
-  every CI run so drift fails the build rather than accumulating quietly
-  (recipe comment: `Justfile`, `check-parity`).
+  copy of projectbluefin/bluefin's `build_files/packages/base.toml` pinned to
+  the revision in `packages/.bluefin-parity-ref` and must stay that way.
+  **Never hand-edit it.** Sync it verbatim from upstream; any drift is a parity
+  bug. `just check-parity` diffs it against upstream on every CI run so drift
+  fails the build rather than accumulating quietly (recipe comment: `Justfile`,
+  `check-parity`).
 - **`packages/utah.toml`** — Utah's overlay. Everything Utah needs *in
   addition to* or *instead of* the contract lives here. The full rules are in
   the header comment of that file (cite it; do not move or copy it):
@@ -40,6 +41,10 @@ policy for changing them.
   - `[gnome]` — GNOME 51 desktop contract Hummingbird does not ship.
   - `[build]` — toolchain needed to build the pinned GNOME extensions
     (`scripts/build-gnome-extensions.sh`).
+  - `[parity]` — what Bluefin inherits from Fedora's base image and Hummingbird
+    has in its repository but not in its bootable base; CI's package
+    availability step resolves the real transaction and is the gate on every
+    name there.
   - `[services]` — desktop services Bluefin adds on top of the server base.
   - `[unavailable]` — Bluefin contract packages none of Utah's repositories
     provide, plus any `[multimedia_overrides]` name the factory has not yet
@@ -93,6 +98,16 @@ comment, `Containerfile` ~L94; repo files copied at `Containerfile` L40).
 `Containerfile.kernel`'s builder stage may use the pinned Fedora 44 repository
 (`packages/fedora-44.repo`) strictly as a builder-only toolchain.
 
+The install-source identity is single-sourced in `packages/*.repo`. Each repository
+participating in the package install transaction carries a `# utah-install: true`
+annotation (either directly preceding or within the `[section]` header in
+`packages/utah-packages.repo` and `packages/hummingbird.repo`).
+`scripts/install-packages.py` derives the `--enablerepo` set from these annotations
+ordered by priority (ascending), so rebuilds in `utah-packages` (`priority=1`)
+precede base Hummingbird packages (`priority=10`). Repositories without this marker
+(such as `nvidia-container-toolkit` or builder-only `fedora-44`) are excluded from
+the desktop package transaction.
+
 The pinned package image is an RPM repository, not a runtime dependency: its
 contents are copied into the image so the package transaction is reproducible
 and does not depend on a mutable mirror (`Containerfile` L41-44).
@@ -115,6 +130,20 @@ drifted once, so a contract package was installed and never verified
 the verifier is only the off-image `--check` fallback and asserts nothing
 about installation.
 
+On NVIDIA flavors (`IMAGE_FLAVOR=nvidia` or `nvidia-gaming`),
+`scripts/verify-rpm-contract.py` also asserts that the kernel module
+(`extra/nvidia/nvidia.ko`) is present for every bootable kernel in the image and
+that userspace tools (`nvidia-smi`, `nvidia-driver-version`) exist. Determining
+the base kernel release cannot rely solely on `rpm -q kernel`, because `kernel`
+is a metapackage that may not be installed on a minimal bootc base, and rpm queries
+may return nothing or unhelpful text such as `package kernel is not installed`. If
+no release resolves from rpm (empty or whitespace output), or if the resolved
+release does not correspond to a directory under `/usr/lib/modules/<release>`, the
+verifier falls back to the module trees present on disk under `/usr/lib/modules/`
+(excluding the OGC gaming release for the base check). Furthermore, the verifier
+guards against empty release strings, refusing to construct module paths from empty
+releases or emit missing-module errors with empty kernel names.
+
 ## Failure semantics
 
 - A contract package or dependency missing from the installation transaction
@@ -131,8 +160,16 @@ about installation.
   requires a transaction summary and rejects dependency and repository errors.
 - `[unavailable]` entries still present in the install set are a validation
   error (`install-packages.py --check`).
-- Drift in `packages/bluefin.toml` from upstream is a CI failure
-  (`just check-parity`).
+- Drift in `packages/bluefin.toml` from upstream at `packages/.bluefin-parity-ref`
+  is a CI failure (`just check-parity`).
+
+## Pinned upstream parity reference
+
+`packages/.bluefin-parity-ref` holds the 40-character commit SHA that
+`packages/bluefin.toml` is synchronized with. The reference exists so Utah's
+parity gate tests against a known revision rather than moving with Bluefin's
+default branch, preventing unrelated upstream changes from breaking Utah's CI.
+Update it whenever synchronizing `packages/bluefin.toml` with upstream.
 
 Current counts, per `install-packages.py --check`: 78 Bluefin parity packages
 resolved (58 from `[fedora]`, 5 of Bluefin's 12 `[multimedia_overrides]` from
