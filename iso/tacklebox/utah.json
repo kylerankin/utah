@@ -1,0 +1,18 @@
+{
+  "media_name": "UTAH_LIVE",
+  "size": "6G",
+  "offline_payloads": [
+    "ghcr.io/projectbluefin/utah:testing"
+  ],
+  "bootable_environments": [
+    {
+      "id": "utah",
+      "image": "ghcr.io/projectbluefin/utah:testing",
+      "title": "Utah (live)",
+      "desktop": "gnome",
+      "modes": ["live"],
+      "live_customize": ["configure-live.sh"]
+    }
+  ],
+  "kargs": ["console=ttyS0,115200n8"]
+}

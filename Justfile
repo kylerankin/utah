@@ -31,6 +31,10 @@ check:
     # the E2E matrix, and iso/scripts/live-kernel.py, which runs mid-ISO-build
     # -- so a parse error in them surfaced minutes into a build instead of here.
     python3 scripts/check-script-syntax.py
+    # The new `iso-tacklebox` recipe must parse; a broken Justfile fails every
+    # recipe, so assert it here rather than discovering it at the next just
+    # invocation.
+    just --list >/dev/null
     test -f Containerfile
     test -f packages/bluefin.toml
     test -f packages/.bluefin-parity-ref
@@ -74,6 +78,15 @@ check:
     test -f iso/scripts/build-iso.sh
     python3 -m json.tool iso/live/src/etc/bootc-installer/images.json >/dev/null
     python3 -m json.tool iso/live/src/etc/bootc-installer/recipe.json >/dev/null
+    # tacklebox live-ISO path: recipe is valid JSON with the fields the build
+    # needs, and its just recipe + scripts exist. Additive -- build-iso.sh is
+    # not removed, so the two ISO paths coexist.
+    python3 -m json.tool iso/tacklebox/utah.json >/dev/null
+    python3 -c 'import json; r=json.load(open("iso/tacklebox/utah.json")); e=r["bootable_environments"][0]; assert e["modes"]==["live"] and e["live_customize"]==["configure-live.sh"] and r["offline_payloads"] and r["media_name"]; print("utah.json ok")'
+    test -f iso/tacklebox/utah.json
+    test -f iso/tacklebox/configure-live.sh
+    test -x iso/scripts/tacklebox-iso.sh
+    test -x iso/scripts/tacklebox-boot-gate.sh
     grep -q 'org.bootcinstaller.Installer' iso/live/src/install-flatpaks.sh
     grep -q 'containers-storage' iso/scripts/build-iso.sh
     grep -q 'UTAH_LIVE' iso/scripts/build-iso.sh
@@ -420,6 +433,14 @@ iso stream="testing" debug="0":
     podman image exists "$ref" || { echo "Image $ref not found; run just build-ghcr {{ image }} {{ stream }} main" >&2; exit 1; }
     mkdir -p "{{ base_dir }}"
     bash iso/scripts/build-iso.sh "$ref" "$(realpath "{{ base_dir }}")/utah-live.iso" "Utah Live" "{{ debug }}" "ghcr.io/{{ repo_organization }}/{{ image }}:{{ stream }}"
+
+# Build a single-architecture UEFI live ISO from the published testing image
+# with tuna-os/tacklebox. Proves the Utah live-boot path (recipe + offline
+# payload + UTAH_LIVE_READY marker); installer and Flatpak parity rides on
+# install-flatpaks.sh, which configure-live.sh reuses. CI boots the result and
+# greps the serial console for UTAH_LIVE_READY (#229).
+iso-tacklebox OUT="iso/tacklebox/build/utah-tbx.iso" REF="ghcr.io/{{ repo_organization }}/{{ image }}:testing":
+    ./iso/scripts/tacklebox-iso.sh {{REF}} iso/tacklebox/utah.json {{OUT}}
 
 # Boot the live ISO with QEMU-for-Docker and expose its noVNC console.
 boot-iso:

@@ -22,6 +22,7 @@ jobs:
       actions: read
     outputs:
       matrix: ${{ steps.inputs.outputs.matrix }}
+      main_ref: ${{ steps.inputs.outputs.main_ref }}
       sha: ${{ steps.inputs.outputs.sha }}
       run: ${{ steps.inputs.outputs.run }}
     steps:
@@ -43,8 +44,13 @@ jobs:
           gh run download "$BUILD_RUN" --repo "$REPOSITORY" \
             --pattern 'image-digest-testing-*' --dir digests
           matrix=$(python3 scripts/resolve-e2e-inputs.py run.json digests "$REPOSITORY")
+          # The tacklebox live ISO is built for the main flavor only (utah); the
+          # kernel flavors are covered by the luks job above. Resolve that one
+          # ref here so tacklebox-iso stays a single build, not a whole matrix.
+          main_ref=$(python3 -c "import json,sys; m=json.load(sys.stdin); print(next(x['ref'] for x in m['include'] if x['image']=='utah'))" <<<"$matrix")
           {
             echo "matrix=$matrix"
+            echo "main_ref=$main_ref"
             echo "sha=$(jq -r .head_sha run.json)"
             echo "run=$BUILD_RUN"
           } >> "$GITHUB_OUTPUT"
@@ -140,6 +146,81 @@ jobs:
           retention-days: 30
           path: docs/verification/
       # Never upload debug ISOs or test disks: they contain test passwords.
+
+  # Build the same image with tuna-os/tacklebox and prove the live-boot path
+  # the issue asks for: the ISO comes up and the UTAH_LIVE_READY marker the
+  # live_customize step installs (#229) appears on the serial console. The
+  # bootc-installer payload and Flatpak parity ride on install-flatpaks.sh,
+  # which configure-live.sh reuses -- the full LUKS install through it is the
+  # next milestone.
+  tacklebox-iso:
+    needs: resolve
+    runs-on: ubuntu-26.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - name: Prepare ISO and QEMU host
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get update
+          sudo apt-get install -y podman skopeo uidmap slirp4netns fuse-overlayfs \
+            squashfs-tools xorriso dosfstools mtools qemu-system-x86 qemu-utils \
+            ovmf
+          mkdir -p output evidence
+          df -h .
+      - name: Pull exact published payload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_REF: ${{ needs.resolve.outputs.main_ref }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | podman login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          podman pull "$IMAGE_REF"
+          podman logout ghcr.io
+      - name: Build the ISO with tacklebox
+        env:
+          IMAGE_REF: ${{ needs.resolve.outputs.main_ref }}
+        run: |
+          set -euo pipefail
+          bash iso/scripts/tacklebox-iso.sh "$IMAGE_REF" iso/tacklebox/utah.json \
+            "$PWD/output/utah-tbx.iso" 2>&1 | tee evidence/tbx-build.log
+      - name: Check the ISO is within the size budget
+        run: |
+          set -euo pipefail
+          # The live ISO must stay under the budget (#128): the embedded image,
+          # the Flatpaks, and the bootc-installer bundle all live inside it.
+          size_bytes=$(stat -c %s output/utah-tbx.iso)
+          limit=$((6 * 1024 * 1024 * 1024))
+          echo "utah-tbx.iso is $size_bytes bytes"
+          test "$size_bytes" -le "$limit" || { echo "ISO exceeds the size budget" >&2; exit 1; }
+      - name: Live-boot and observe the UTAH_LIVE_READY marker
+        run: |
+          set -euo pipefail
+          bash iso/scripts/tacklebox-boot-gate.sh "$PWD/output/utah-tbx.iso" UTAH_LIVE_READY \
+            2>&1 | tee evidence/tbx-boot.log
+      - name: Preserve diagnostics even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: tacklebox-iso-diagnostics-utah
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            evidence/
+      - name: Preserve the built ISO as the passing record
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: tacklebox-iso-verified-utah
+          if-no-files-found: error
+          retention-days: 30
+          path: output/utah-tbx.iso
 
   # Test credentials are only present in the DEBUG=1 ISO above. Build this
   # artifact after the whole matrix passes, so a retained ISO is production
