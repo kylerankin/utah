@@ -39,3 +39,7 @@ fi
 
 rpm-ostree kargs --append-if-missing="${WORKAROUND_KARG}"
 echo "Applied Framework UCSI workaround (${WORKAROUND_KARG}). Reboot to activate."
+
+# Record success only after the body ran, so a failing first-boot hook retries
+# next boot instead of being permanently skipped (common #1196 new contract).
+version-script-commit framework-ucsi-workaround privileged 1
