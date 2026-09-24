@@ -234,7 +234,7 @@ jobs:
       image: ${{ fromJSON(needs.resolve.outputs.digests)[matrix.image] }}
       suites: ${{ matrix.suites }}
       test_repository: projectbluefin/testsuite
-      test_ref: 5cf5603759fc1ddf01485601ce833ba9cb531980
+      test_ref: 4c053fd2ea7837d1d92788adb2812122fa666e65
   promote-to-testing:
     needs: [resolve, luks, production-iso, gate]
     runs-on: ubuntu-26.04
