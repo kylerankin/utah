@@ -70,13 +70,23 @@ enable_unit ublue-system-setup.service
 enable_unit systemd-resolved.service
 enable_unit bootc-unified-storage.service
 
-# Bluefin's Brewfile and Bazaar preinstall hook need the Flathub remote before
-# first boot. Keep this as a .flatpakrepo descriptor so the remote is available
-# to both flatpak-preinstall and brew-setup without baking mutable /var state.
+# Bluefin's Brewfile, the Bazaar preinstall hook, and Utah's Ghostty need their
+# remotes before first boot. Keep these as .flatpakrepo descriptors so each
+# remote is available to both flatpak-preinstall and brew-setup without baking
+# mutable /var state.
 install -d -m0755 /etc/flatpak/remotes.d
 curl --fail --retry 3 --silent --show-error \
     --output /etc/flatpak/remotes.d/flathub.flatpakrepo \
     https://dl.flathub.org/repo/flathub.flatpakrepo
+
+# The Ghostty terminal ships from the TunaOS OCI remote, not Flathub. Ship its
+# remote the same way as Flathub so `flatpak preinstall` can resolve the
+# Ghostty entry Utah declares in preinstall.d without a mutable download at
+# runtime. A .flatpakrepo descriptor only names the remote; the bundle is
+# verified by Ostree/Flatpak when it is pulled.
+curl --fail --retry 3 --silent --show-error \
+    --output /etc/flatpak/remotes.d/tuna-os.flatpakrepo \
+    https://tunaos.org/flatpak/tuna-os.flatpakrepo
 
 disable_unit flatpak-add-fedora-repos.service
 
