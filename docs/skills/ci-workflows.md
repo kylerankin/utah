@@ -266,9 +266,11 @@ first:
 | gaming | `utah-gaming` | `smoke,common,bazzite` |
 | nvidia-gaming | `utah-nvidia-gaming` | `smoke,common,nvidia,bazzite` |
 
-The `nvidia` suite asserts the kernel module is loaded, the driver userspace
-(`nvidia-smi`), and vulkan/CUDA/VA-API; `bazzite` validates the gaming
-userspace. The job calls the pinned `projectbluefin/testsuite` reusable
+The `bazzite` suite validates the gaming userspace. The `nvidia` suite is
+currently hardware-blocked at the pinned test ref: every nvidia scenario is
+stubbed-only (tagged `@hardware_blocked`) and excluded from the run, so the
+nvidia flavors gain only `smoke,common` coverage until real nvidia scenarios
+land. The job calls the pinned `projectbluefin/testsuite` reusable
 e2e workflow (`ee82d53... # v1`) and checks the tests out of that repo pinned
 to a specific SHA (not `main`), so an unreleased test change cannot start or
 stop `:testing` promotion with no local commit to revert. `gate` is a `fail-fast: false` matrix, so one
