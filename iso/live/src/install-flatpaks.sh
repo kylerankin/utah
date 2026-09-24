@@ -2,6 +2,11 @@
 # Bake Utah's default Flatpaks and the bootc-installer bundle into the live
 # squashfs. Adapted from dakota-iso: the cache is build-only; the resulting
 # Flatpak repository is part of the ISO and is available offline to fisherman.
+#
+# Utah's default Flatpaks are declared in flatpak's standard preinstall.d (see
+# the generation below) rather than listed here, so the Bluefin parity Brewfile
+# stays the single source of truth and any ISO builder that runs `flatpak
+# preinstall` bakes the same set. See projectbluefin/utah#257.
 set -euo pipefail
 
 # Flathub pulls are the largest network operation in the whole ISO build --
@@ -39,6 +44,11 @@ retry_flatpak() {
 }
 
 FLATPAK_CACHE=/var/cache/flatpak-dl
+# The parity contract: Bluefin's Brewfile, shipped by the common profile. The
+# preinstall.d entries below are generated from it, so adding a flatpak to the
+# Brewfile adds it to every Utah ISO without touching this script.
+BREWFILE=/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile
+PREINSTALL_DIR=/usr/share/flatpak/preinstall.d
 INSTALLER_APP_ID=org.bootcinstaller.Installer
 INSTALLER_REPO=tuna-os/bootc-installer
 BUNDLE=org.bootcinstaller.Installer.flatpak
@@ -93,6 +103,12 @@ fi
 # after every E2E flavor had passed. --if-not-exists keeps a retry a no-op once
 # one attempt succeeds.
 retry_flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+# The Ghostty entry below resolves from the TunaOS remote. The base image ships
+# its descriptor at /etc/flatpak/remotes.d, but register it here too so
+# `flatpak preinstall` can resolve Ghostty even if the descriptor was not
+# auto-imported. Idempotent.
+flatpak remote-add --system --if-not-exists tuna-os \
+    https://tunaos.org/flatpak/tuna-os.flatpakrepo
 
 # A bundle import needs a temporary local remote in an OCI build: direct
 # --bundle installs omit the deploy/active ref without flatpak-system-helper.
@@ -130,52 +146,58 @@ for branch in /var/lib/flatpak/app/${INSTALLER_APP_ID}/x86_64/*; do
 done
 flatpak override --system --filesystem=/etc:ro "${INSTALLER_APP_ID}"
 
-# /tmp/flatpaks-list already holds bare application ids: the Containerfile
-# converts the Brewfile before copying it in, so the contract stays the single
-# source of truth. Parsing it as Brewfile syntax a second time matched nothing
-# and left the array empty, and an empty array makes flatpak read the remote
-# name as the thing to install:
-#   error: No remote refs found for 'flathub'
-mapfile -t apps < <(grep -v '^[[:space:]]*#' /tmp/flatpaks-list | grep -v '^[[:space:]]*$')
-if (( ${#apps[@]} == 0 )); then
-    echo "No flatpaks listed in /tmp/flatpaks-list; the Brewfile conversion is broken" >&2
-    exit 1
-fi
-retry_flatpak install --system --noninteractive --no-related --or-update flathub "${apps[@]}"
-
-# Ghostty, from the TunaOS OCI remote.
-#
-# Utah ships no terminal emulator at all otherwise. Bluefin's own image test
-# asserts ptyxis, but ptyxis is not in Bluefin's package contract because
-# Fedora's base image carries it -- and Hummingbird's does not, nor does it
-# package ptyxis, vte291 or gnome-console, so there is nothing to install.
-# Until this factory builds a terminal, the flatpak is the terminal.
-#
-# Kept out of the Brewfile-derived list on purpose: that list is the parity
-# contract with Bluefin and verify-desktop-contract compares it byte for byte.
-# This is Utah's own addition and does not belong in it.
-retry_flatpak remote-add --system --if-not-exists tuna-os \
-    https://tunaos.org/flatpak/tuna-os.flatpakrepo
-retry_flatpak install --system --noninteractive --no-related --or-update \
-    tuna-os com.mitchellh.ghostty
-# `uninstall --unused` removes every runtime that no installed app depends on,
-# and the Brewfile lists two of exactly that kind: the adw-gtk3 GTK3 themes.
-# Nothing requires them, so they were stripped from the ISO and the offline
-# install check failed on every flavor (post-testing-e2e run 36047291319):
-#   FAIL: default Flatpak(s) missing on the installed, network-isolated
-#   system: org.gtk.Gtk3theme.adw-gtk3 org.gtk.Gtk3theme.adw-gtk3-dark
-# Pin each listed runtime first; --unused never removes a pinned ref. The pin
-# is part of /var/lib/flatpak, so it also reaches the installed system and
-# keeps later `--unused` cleanups there from removing the themes too.
-declare -A wanted=()
-for app in "${apps[@]}"; do wanted["${app}"]=1; done
-while read -r ref; do
-    id="${ref#runtime/}"; id="${id%%/*}"
-    if [[ -n "${wanted[${id}]:-}" ]]; then
-        flatpak pin --system "${ref}"
+# Declare Utah's default Flatpaks in preinstall.d. flatpak-preinstall.service
+# runs `flatpak preinstall -y` on first boot, and tuna-os/tacklebox bakes the
+# same set from these entries, so this is the single place the default list
+# lives. The entries are generated from the parity Brewfile rather than
+# re-listed, so the two can never drift.
+mkdir -p "${PREINSTALL_DIR}"
+PREINSTALL_BREW="${PREINSTALL_DIR}/brewfile.preinstall"
+: > "${PREINSTALL_BREW}"
+# Bazaar is declared by the hand-maintained bazaar.preinstall (it carries the
+# flathub CollectionID history this repo keeps on purpose), so skip it here to
+# avoid declaring the same app-id twice.
+while IFS= read -r id; do
+    [ -n "${id}" ] || continue
+    if [ "${id}" = "io.github.kolunmi.Bazaar" ]; then
+        continue
     fi
-done < <(flatpak list --system --runtime --columns=ref | sed 's|^|runtime/|')
-flatpak uninstall --system --noninteractive --unused || true
+    # The org.gtk.Gtk3theme.* entries are runtimes on the 3.22 branch, not
+    # applications on stable; everything else in the Brewfile is an app.
+    if [[ "${id}" == org.gtk.Gtk3theme.* ]]; then
+        props=("Branch=3.22" "IsRuntime=true")
+    else
+        props=("Branch=stable" "IsRuntime=false")
+    fi
+    {
+        printf '[Flatpak Preinstall %s]\n' "${id}"
+        printf 'remote=flathub\n'
+        for prop in "${props[@]}"; do
+            printf '%s\n' "${prop}"
+        done
+        printf '\n'
+    } >> "${PREINSTALL_BREW}"
+done < <(awk -F'"' '/^flatpak / && NF >= 2 {print $2}' "${BREWFILE}")
+
+# Ghostty is Utah's only terminal and ships from the TunaOS remote, so it is
+# kept out of the Bluefin parity Brewfile (verify-desktop-contract compares it
+# byte for byte). Declare it here with its own remote.
+printf '[Flatpak Preinstall com.mitchellh.ghostty]\nremote=tuna-os\nBranch=stable\nIsRuntime=false\n\n' \
+    > "${PREINSTALL_DIR}/ghostty.preinstall"
+
+# Install everything declared in preinstall.d. This replaces the former
+# hand-maintained install list: the entries above are the contract, and running
+# preinstall here bakes the same set into the live ISO that the first-boot
+# service applies to an installed target.
+flatpak preinstall -y
+
+# Pin the listed GTK3 theme runtimes so a later `flatpak uninstall --unused`
+# keeps them: nothing depends on them, so --unused would drop them (#256).
+The pin lives in /var/lib/flatpak, which fisherman copies to the target, so
+installed systems keep the themes through later cleanups too.
+for runtime in org.gtk.Gtk3theme.adw-gtk3 org.gtk.Gtk3theme.adw-gtk3-dark; do
+    flatpak pin --system "runtime/${runtime}/x86_64/3.22" || true
+done
 
 mkdir -p "${FLATPAK_CACHE}"
 # Replacing the directory outright is what --delete was for: a stale object
