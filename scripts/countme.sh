@@ -82,7 +82,9 @@ build_url() {
 
 # Record the install epoch on first run so subsequent pings measure true age.
 # Best-effort: if the directory is not writable we print the epoch back so the
-# caller still reports the first-week bucket, which is harmless.
+# caller still reports the first-week bucket, which is harmless. The caller
+# captures this stdout, so a non-writable epoch dir must not fall through to a
+# 'cat' of a file that was never created (that would trip 'set -e').
 ensure_epoch() {
     local now="$1"
     if [ -r "${EPOCH_FILE}" ]; then
@@ -109,8 +111,12 @@ main() {
     if [ -n "${COUNTME_EPOCH:-}" ]; then
         epoch="${COUNTME_EPOCH}"
     else
-        ensure_epoch "${now}"
-        epoch="$(cat "${EPOCH_FILE}")"
+        # ensure_epoch prints the epoch to stdout only when it could not
+        # persist it; otherwise the value lives on disk. Guard the cat so a
+        # non-writable epoch dir (the case that triggered the original crash)
+        # does not trip 'set -e'.
+        epoch="$(ensure_epoch "${now}")"
+        [ -n "${epoch}" ] || epoch="$(cat "${EPOCH_FILE}")"
     fi
 
     # A clock going backwards must not yield a negative age.
@@ -147,11 +153,6 @@ main() {
     if command -v curl >/dev/null 2>&1; then
         curl -fsS --retry 2 --retry-delay 2 --max-time 15 \
             -o /dev/null -- "${url}" >/dev/null 2>&1 || true
-    else
-        # Fall back to /dev/tcp when curl is absent from the runtime image.
-        { exec 3<>/dev/tcp/countme.projectbluefin.io/443 2>/dev/null && \
-          printf 'GET %s HTTP/1.1\r\nHost: countme.projectbluefin.io\r\nConnection: close\r\n\r\n' \
-          "${url#*://}" >&3; } || true
     fi
 
     printf 'countme: weekly ping sent (repo=%s, flavor=%s, bucket=%s)\n' \
