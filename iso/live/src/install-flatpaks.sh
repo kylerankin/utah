@@ -146,8 +146,8 @@ flatpak preinstall -y
 
 # Pin the listed GTK3 theme runtimes so a later `flatpak uninstall --unused`
 # keeps them: nothing depends on them, so --unused would drop them (#256).
-The pin lives in /var/lib/flatpak, which fisherman copies to the target, so
-installed systems keep the themes through later cleanups too.
+# The pin lives in /var/lib/flatpak, which fisherman copies to the target, so
+# installed systems keep the themes through later cleanups too.
 for runtime in org.gtk.Gtk3theme.adw-gtk3 org.gtk.Gtk3theme.adw-gtk3-dark; do
     flatpak pin --system "runtime/${runtime}/x86_64/3.22" || true
 done
