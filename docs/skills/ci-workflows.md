@@ -320,8 +320,9 @@ flavor's own behave suites before `:testing` advances. The digests come from
 from the same artifacts the LUKS matrix reads), so every flavor is pinned to
 the precise digest this build produced.
 
-Suites per flavor, all starting with `smoke,common` so a broken boot is caught
-first:
+Suites per flavor come from the `suites` map in `config/flavors.json` (via
+`python3 scripts/flavors.py suites`), all starting with `smoke,common` so a
+broken boot is caught first:
 
 | Flavor | Image | Suites |
 |--------|-------|--------|

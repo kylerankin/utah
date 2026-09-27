@@ -17,6 +17,7 @@ next to the list rather than in a commit message.
     flavors.py list-main      ["main"]            flavors that build on the pristine base
     flavors.py list-kernel    ["nvidia", ...]     flavors that build on the kernel cache
     flavors.py image FLAVOR   utah / utah-nvidia  published image name for flavor
+    flavors.py suites     [{"image": "utah", "suites": "smoke,common"}, ...]  gate
 """
 import json
 import sys
@@ -30,7 +31,8 @@ IMAGE = {
     "nvidia-gaming": "utah-nvidia-gaming",
 }
 
-flavors = json.loads(CONFIG.read_text())["flavors"]
+config = json.loads(CONFIG.read_text())
+flavors = config["flavors"]
 unknown = [f for f in flavors if f not in IMAGE]
 if unknown:
     raise SystemExit(f"unknown flavor(s) in {CONFIG.name}: {', '.join(unknown)}")
@@ -56,13 +58,14 @@ elif what == "list-main":
 elif what == "list-kernel":
     print(json.dumps([f for f in flavors if f != "main"]))
 elif what == "suites":
-    SUITES = {
-        "main": "smoke,common",
-        "nvidia": "smoke,common,nvidia",
-        "gaming": "smoke,common,bazzite",
-        "nvidia-gaming": "smoke,common,nvidia,bazzite",
-    }
-    print(json.dumps([{"image": IMAGE[f], "suites": SUITES[f]} for f in flavors]))
+    # The testsuite suites each flavor's exact digest must pass before
+    # :testing advances. They live beside the flavor list so adding a flavor
+    # is one config edit, not a config edit plus a code edit here.
+    suites = config.get("suites", {})
+    missing = [f for f in flavors if f not in suites]
+    if missing:
+        raise SystemExit(f"no suites in {CONFIG.name} for flavor(s): {', '.join(missing)}")
+    print(json.dumps([{"image": IMAGE[f], "suites": suites[f]} for f in flavors]))
 elif what == "image":
     if len(sys.argv) < 3:
         raise SystemExit("usage: flavors.py image FLAVOR")

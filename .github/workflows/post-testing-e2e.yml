@@ -56,8 +56,8 @@ jobs:
           # exact digest: an empty image input would fail later and confusingly,
           # hiding the real cause (a missing build artifact) behind four.
           missing=$(jq -r --argjson d "$digests" \
-            '[.[] | .image | select(($d[.]) == null or ($d[.] | length) == 0)] \
-            | (if length == 0 then "" else ":\(join(", "))" end)' \
+            '[.[] | .image | select(($d[.]) == null or ($d[.] | length) == 0)]
+            | (if length == 0 then "" else ": \(join(", "))" end)' \
             <<< "$suites_json")
           if [ -n "$missing" ]; then
             echo "::error::gate: no published exact-digest for flavor(s)$missing — promotion would boot an empty image"
