@@ -1,0 +1,18 @@
+# Ghostty, from the TunaOS OCI remote (/etc/flatpak/remotes.d/tuna-os.flatpakrepo).
+#
+# Utah ships no terminal emulator at all otherwise. Bluefin's own image test
+# asserts ptyxis, but ptyxis is not in Bluefin's package contract because
+# Fedora's base image carries it -- and Hummingbird's does not, nor does it
+# package ptyxis, vte291 or gnome-console, so there is nothing to install.
+# Until this factory builds a terminal, the flatpak is the terminal.
+#
+# Kept out of the Brewfile-derived brewfile.preinstall on purpose: the Brewfile
+# is the parity contract with Bluefin and verify-desktop-contract compares it
+# byte for byte. This is Utah's own addition and does not belong in it.
+#
+# preinstall.d has no key naming a remote; flatpak tries every configured
+# remote (or only those whose collection ID matches CollectionID). Only TunaOS
+# carries this app, and only on its master branch.
+[Flatpak Preinstall com.mitchellh.ghostty]
+Branch=master
+IsRuntime=false

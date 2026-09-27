@@ -206,6 +206,20 @@ take the digest from that release's `org.bootcinstaller.Installer.flatpak`
 asset (`digest` field of `gh api repos/tuna-os/bootc-installer/releases/tags/<tag>`,
 or download and `sha256sum` it) rather than guessing or reusing an old value.
 
+The default Flatpaks are declared in the image's
+`/usr/share/flatpak/preinstall.d`, not in the ISO bake: `bazaar.preinstall`
+and `ghostty.preinstall` ship from `system_files`, and
+`scripts/configure-services.sh` generates `brewfile.preinstall` from the
+Bluefin Brewfile. `install-flatpaks.sh` only runs `flatpak preinstall`, so the
+ISO and an installed system's `flatpak-preinstall.service` apply the same set.
+preinstall.d has no key that names a remote: an entry resolves from every
+configured remote, or only those whose collection ID equals its
+`CollectionID`, and an entry nothing resolves is skipped with exit 0 (the bake
+checks every declared ref landed). Utah's Flathub remote has no collection ID,
+so no entry may carry one, and Ghostty is on TunaOS's `master` branch only.
+The TunaOS remote descriptor is vendored at
+`system_files/shared/etc/flatpak/remotes.d/tuna-os.flatpakrepo`, never fetched.
+
 ## Tacklebox ISOs (unpublished variants)
 
 `just iso-tacklebox` builds a live ISO via
