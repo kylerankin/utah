@@ -4,14 +4,15 @@
 source /usr/lib/ublue/setup-services/libsetup.sh
 
 # Compat shim: common libsetup.sh builds older than projectbluefin/common #1196
-# stamp the version inside version-script itself and provide no
-# version-script-commit. Define a no-op so this hook works against both the old
-# (stamp-on-check) and the new (stamp-on-commit) contracts.
-if ! declare -F version-script-commit >/dev/null; then
+# have only version-script, which records the version before the body runs, and
+# no version-script-check/version-script-commit pair. Fall back to that legacy
+# gate and make the commit a no-op, so this hook works against both contracts.
+if ! declare -F version-script-check >/dev/null; then
+    version-script-check() { version-script "$@"; }
     version-script-commit() { :; }
 fi
 
-version-script framework-ucsi-workaround privileged 1 || exit 0
+version-script-check framework-ucsi-workaround privileged 1 || exit 0
 
 set -euo pipefail
 
