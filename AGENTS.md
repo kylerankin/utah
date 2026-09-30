@@ -21,6 +21,7 @@ published — no image, no ISO artifact, no installer.
 just check                            # full static validation (run before every commit)
 just check-parity                     # bluefin.toml must equal upstream base.toml (network)
 just check-repos                      # contract packages resolvable in enabled repos (network)
+just check-unavailable                # [unavailable] entries still unsatisfiable (network)
 just build-ghcr utah testing main     # local image build -> localhost/utah:testing
 just check-desktop-contract           # in-image verifiers against a built image
 just generate-bootable-image testing  # bootc install to-disk -> output/bootable.raw
@@ -45,7 +46,11 @@ checks (`scripts/check-skill-frontmatter.sh`, `scripts/check-skill-index.sh`,
 - **Utah's own package changes live in `packages/utah.toml`** (`[gnome]`,
   `[build]`, `[unavailable]`). Every `[unavailable]` entry MUST carry a
   tracking issue. A missing contract package is a build failure, never a
-  silent skip.
+  silent skip. `[unavailable]` is asserted on every build too:
+  `just check-unavailable` fails the build when an entry becomes installable,
+  so an upstream release cannot silently close a gap the manifest never
+  intended. Move a now-installable entry into its real section (or remove it)
+  with a matching manifest edit.
 - **`config/flavors.json` is the single source of the flavor set.** No
   workflow or Justfile recipe may name `utah-nvidia` or `utah-gaming`
   literally — `just check` fails on it. Retire a flavor by moving it under

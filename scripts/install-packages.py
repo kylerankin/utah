@@ -166,6 +166,62 @@ def installed(packages: list[str]) -> list[str]:
     return sorted(set(out.stdout.split()))
 
 
+# A declined --assumeno run exits nonzero for a *valid* transaction, so these
+# markers are what separate "the package exists and installs" from "the
+# package is absent or its dependencies cannot be met": the absence is what
+# an [unavailable] entry must keep showing.
+_UNAVAILABLE_ERROR_RE = re.compile(
+    r"No match for argument|nothing provides|conflicting requests|cannot install both"
+    r"|Error:|Failed to"
+)
+_UNAVAILABLE_SUMMARY_RE = re.compile(
+    r"(?m)^Transaction Summary:?\s*$|^Nothing to do\.?\s*$"
+)
+
+
+def is_installable(dnf: str, name: str, repos: tuple[str, ...]) -> bool:
+    """True when the pinned repository can satisfy a single package: a valid
+    Transaction Summary with no match or dependency error. The --assumeno run
+    declines the install, so dnf exits nonzero for a valid transaction; a
+    missing package or broken dependency is rejected explicitly rather than
+    accepted as that decline."""
+    out = subprocess.run(
+        [dnf, "--assumeno", "--disablerepo=*",
+         *(f"--enablerepo={r}" for r in repos),
+         "install", name],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        env={**os.environ, "LC_ALL": "C"}, check=False,
+    )
+    return (
+        out.returncode in (0, 1)
+        and not _UNAVAILABLE_ERROR_RE.search(out.stdout)
+        and re.search(_UNAVAILABLE_SUMMARY_RE, out.stdout)
+    )
+
+
+def assert_unavailable(dnf: str, repos: tuple[str, ...], overlay: Path) -> int:
+    """Fail (exit 1) when any [unavailable] entry is now installable in the
+    pinned repository. Each [unavailable] entry is a deliberate gap in Utah's
+    repositories -- a package the image cannot install and never should. That
+    gap is only real while the package stays unavailable; an upstream release
+    can make it installable without touching the manifest, silently adding a
+    package the contract never intended. Point at the manifest so the
+    contributor knows where to triage."""
+    unavailable = section(overlay, "unavailable")
+    if not unavailable:
+        print("No [unavailable] entries; nothing to assert")
+        return 0
+    installable = [name for name in unavailable if is_installable(dnf, name, repos)]
+    if installable:
+        print(f"ERROR: {len(installable)} [unavailable] entry(ies) are now installable:",
+              file=sys.stderr)
+        for name in installable:
+            print(f"  - {name} (see packages/utah.toml)", file=sys.stderr)
+        return 1
+    print(f"All {len(unavailable)} [unavailable] entries remain unavailable")
+    return 0
+
+
 EVR_QUERYFORMAT = "%{NAME} %{ARCH} %{EPOCH}:%{VERSION}-%{RELEASE}\n"
 
 
@@ -235,6 +291,8 @@ def main() -> int:
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--resolve", action="store_true",
                         help="resolve the full transaction without installing packages")
+    parser.add_argument("--assert-unavailable", action="store_true",
+                        help="fail if any [unavailable] entry is now installable in the pinned repository")
     parser.add_argument("--repos-dir", type=Path, default=None,
                         help="directory containing .repo files (defaults to /etc/yum.repos.d or packages/)")
     parser.add_argument("manifest", type=Path)
@@ -266,6 +324,10 @@ def main() -> int:
 
     dnf = dnf_path()
     major = fedora_major()
+
+    if args.assert_unavailable:
+        return assert_unavailable(dnf, repos, args.manifest)
+
     packages = contract(args.manifest, overlay, major)
     build_deps = section(overlay, "build")
     excluded = section(args.manifest, "excluded")

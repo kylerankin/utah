@@ -191,6 +191,35 @@ check-repos:
     echo "check-repos: giving up after 3 engine failures; the registry is not serving the pinned image" >&2
     exit 125
 
+# Fail when an [unavailable] entry becomes installable. The [unavailable] section
+# of packages/utah.toml is a deliberate gap in Utah's repositories; a new upstream
+# release can make a package there installable without touching the manifest, and
+# that silently adds a package the contract never intended. Assert every entry is
+# still unsatisfiable against the pinned repository before the flavor matrix pays
+# for it.
+#
+# Same engine-retry policy as check-repos: exit 125 is the container engine
+# refusing to run (the pinned base image is pulled here), which is an environment
+# failure, not a verdict about the package set. The flavor builds already retry
+# their registry work and this gate gates them, so retry 125 and nothing else.
+# Needs podman and network.
+check-unavailable:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    for attempt in 1 2 3; do
+      python3 scripts/check-unavailable.py packages/utah.toml
+      status=$?
+      if [ "$status" -ne 125 ]; then
+        exit "$status"
+      fi
+      echo "check-unavailable: container engine could not run (exit 125), attempt ${attempt}/3" >&2
+      if [ "$attempt" -ne 3 ]; then
+        sleep $(( attempt * 15 ))
+      fi
+    done
+    echo "check-unavailable: giving up after 3 engine failures; the registry is not serving the pinned image" >&2
+    exit 125
+
 # packages/bluefin.toml is a verbatim copy of Bluefin's base.toml pinned to
 # the revision in packages/.bluefin-parity-ref.  Drift here is a parity bug,
 # so make it loud rather than letting it accumulate quietly.

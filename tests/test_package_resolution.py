@@ -24,15 +24,16 @@ def load(name):
 
 installer = load("install-packages")
 checker = load("check-repo-availability")
+repodata = load("repodata")
 
 
 class PackageResolutionTests(unittest.TestCase):
     def test_metadata_digest_is_verified(self):
         raw = b"metadata"
         digest = "sha256:" + hashlib.sha256(raw).hexdigest()
-        self.assertEqual(checker.verified_bytes(raw, digest), raw)
+        self.assertEqual(repodata.verified_bytes(raw, digest), raw)
         with self.assertRaises(ValueError):
-            checker.verified_bytes(b"changed", digest)
+            repodata.verified_bytes(b"changed", digest)
 
     def metadata_archive(self, name):
         stream = io.BytesIO()
@@ -231,7 +232,7 @@ class PackageResolutionTests(unittest.TestCase):
             overlay = dirpath / "utah.toml"
             base.write_text('[fedora]\npackages=["base"]\n')
             overlay.write_text('[gnome]\npackages=[]\n')
-            
+
             # Missing hummingbird
             repos_dir = dirpath / "repos"
             repos_dir.mkdir()
@@ -240,6 +241,86 @@ class PackageResolutionTests(unittest.TestCase):
                 with self.assertRaises(ValueError) as ctx:
                     installer.main()
                 self.assertIn("public-hummingbird-x86_64-rpms", str(ctx.exception))
+
+
+class UnavailableDriftTests(unittest.TestCase):
+    """The [unavailable] section is a deliberate gap; a package that becomes
+    installable silently closes it. These cover the drift check that fails the
+    build when that gap closes, so a new upstream release cannot add a package
+    the manifest never intended without a corresponding manifest edit."""
+
+    def _mock_dnf(self, installable: set[str]):
+        """Patch subprocess.run so `dnf --assumeno install <name>` reports the
+        names in `installable` as a valid declined transaction and everything
+        else as a missing-package decline."""
+        def _run(command, *args, **kwargs):
+            name = command[command.index("install") + 1] if "install" in command else ""
+            if name in installable:
+                stdout = "Transaction Summary:\nInstall 1 Packages\nOperation aborted.\n"
+            else:
+                stdout = f"No match for argument: {name}\n"
+            return subprocess.CompletedProcess(command, 1, stdout=stdout)
+        return patch.object(installer.subprocess, "run", side_effect=_run)
+
+    def test_resolvable_package_is_installable(self):
+        with self._mock_dnf({"pkg"}):
+            self.assertTrue(installer.is_installable("dnf5", "pkg", ("utah-packages",)))
+
+    def test_valid_declined_transaction_is_installable(self):
+        # --assumeno declines a valid transaction, so a zero exit code (nothing
+        # to do, the package already satisfied) is also installable.
+        with patch.object(installer.subprocess, "run",
+                          return_value=subprocess.CompletedProcess([], 0, stdout="Nothing to do.\n")):
+            self.assertTrue(installer.is_installable("dnf5", "pkg", ("utah-packages",)))
+
+    def test_missing_package_is_not_installable(self):
+        with self._mock_dnf(set()):
+            self.assertFalse(installer.is_installable("dnf5", "ghost", ("utah-packages",)))
+
+    def test_nothing_provides_is_not_installable(self):
+        with patch.object(installer.subprocess, "run",
+                          return_value=subprocess.CompletedProcess([], 1, stdout="nothing provides libmissing.so.1\n")):
+            self.assertFalse(installer.is_installable("dnf5", "pkg", ("utah-packages",)))
+
+    def test_repository_error_is_not_installable(self):
+        with patch.object(installer.subprocess, "run",
+                          return_value=subprocess.CompletedProcess([], 1, stdout="Error: Failed to download metadata\n")):
+            self.assertFalse(installer.is_installable("dnf5", "pkg", ("utah-packages",)))
+
+    def test_unexpected_exit_code_is_not_installable(self):
+        # A non-(0,1) exit code fails even with a present summary: a registry or
+        # engine error must never be read as "installable".
+        with patch.object(installer.subprocess, "run",
+                          return_value=subprocess.CompletedProcess([], 125, stdout="Transaction Summary:\nInstall 1 Packages\n")):
+            self.assertFalse(installer.is_installable("dnf5", "pkg", ("utah-packages",)))
+
+    def test_assert_unavailable_empty_overlay_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            overlay = Path(tmp) / "utah.toml"
+            overlay.write_text('[gnome]\npackages=["shell"]\n')
+            with self._mock_dnf({"x"}), contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(installer.assert_unavailable("dnf5", ("utah-packages",), overlay), 0)
+            self.assertIn("nothing to assert", out.getvalue())
+
+    def test_all_still_unavailable_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            overlay = Path(tmp) / "utah.toml"
+            overlay.write_text('[unavailable]\npackages=["ghost-a", "ghost-b"]\n')
+            with self._mock_dnf(set()), contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(installer.assert_unavailable("dnf5", ("utah-packages",), overlay), 0)
+            self.assertIn("remain unavailable", out.getvalue())
+
+    def test_becomes_installable_fails_and_points_at_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            overlay = Path(tmp) / "utah.toml"
+            overlay.write_text('[unavailable]\npackages=["ghost", "now-here"]\n')
+            err = io.StringIO()
+            with self._mock_dnf({"now-here"}), contextlib.redirect_stderr(err):
+                self.assertEqual(installer.assert_unavailable("dnf5", ("utah-packages",), overlay), 1)
+            text = err.getvalue()
+            self.assertIn("1 [unavailable]", text)
+            self.assertIn("now-here", text)
+            self.assertIn("packages/utah.toml", text)
 
 
 class ParityContractTests(unittest.TestCase):

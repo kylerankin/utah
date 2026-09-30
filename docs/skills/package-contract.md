@@ -63,6 +63,15 @@ policy for changing them.
 a dumping ground for packages that are merely inconvenient (header comment,
 `packages/utah.toml`).
 
+This list is asserted on every build. `just check-unavailable` mounts the same
+pinned repository and base image and runs `install-packages.py --assert-
+unavailable`, which resolves every entry with `dnf --assumeno` and fails the
+build if any is now satisfiable (`scripts/check-unavailable.py`). A gap is only
+real while the package stays unavailable; an upstream release can make an entry
+installable without touching the manifest, and that silently adds a package the
+contract never intended. An entry that becomes installable must move into its
+real section (or be removed from `[unavailable]`) with a matching manifest edit.
+
 ## multimedia_overrides are not missing packages
 
 Bluefin's `[multimedia_overrides]` (twelve names: mesa-libGL,
@@ -156,6 +165,14 @@ releases or emit missing-module errors with empty kernel names.
   requires a transaction summary and rejects dependency and repository errors.
 - `[unavailable]` entries still present in the install set are a validation
   error (`install-packages.py --check`).
+- An `[unavailable]` entry that becomes installable is a build failure.
+  `just check-unavailable` mounts the same pinned repository and base image as
+  `check-repos` and runs `install-packages.py --assert-unavailable`, which
+  resolves every `[unavailable]` entry with `dnf --assumeno` and fails the
+  build if any is now satisfiable. A gap is only real while the package stays
+  unavailable; an upstream release can make an entry installable without
+  touching the manifest, silently adding a package the contract never
+  intended. Needs Podman and network access.
 - Drift in `packages/bluefin.toml` from upstream at `packages/.bluefin-parity-ref`
   is a CI failure (`just check-parity`).
 
@@ -194,6 +211,7 @@ suite rather than shipping quietly.
 ```bash
 just check-parity
 just check-repos
+just check-unavailable
 python3 scripts/install-packages.py --check packages/bluefin.toml
 python3 scripts/verify-rpm-contract.py --check packages/bluefin.toml
 python3 scripts/check-doc-counts.py

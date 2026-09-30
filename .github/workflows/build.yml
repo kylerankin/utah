@@ -49,6 +49,8 @@ jobs:
         run: just check-parity
       - name: Check package availability in Utah's repositories
         run: just check-repos
+      - name: Check [unavailable] entries are still unavailable
+        run: just check-unavailable
       # config/flavors.json is the single source for the build, promote and
       # release matrices. It used to be four literals in three files, which is
       # one place to narrow the set and three places to forget.
