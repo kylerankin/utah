@@ -143,6 +143,16 @@ under `[services]` in `packages/utah.toml` and configured in
 `scripts/configure-services.sh`, which also disables `PrivateTmp` on
 `systemd-resolved.service` for bootc early-boot DNS resolution.
 
+Base-image units that assume a writable `/boot` are gated so they stay
+quiet otherwise. `grub-boot-success.service` ships from Hummingbird and its
+script calls `grub2-editenv`, which writes `/boot/grub2/grubenv` -- but ostree
+remounts `/boot` read-only at runtime, so on Utah the unit fails on every fire
+and nothing consumes the flag (a systemd-boot system sees the same failed
+unit, issue #364). A drop-in shipped in `system_files/` adds
+`!ConditionPathExists=/run/ostree-booted`, mirroring
+`bootc-unified-storage.service`, so systemd marks the unit not-applicable
+instead of failed on every ostree system.
+
 ### The serial getty is masked (#103)
 
 Two Hummingbird defaults compose into a desktop bug. The base declares the
