@@ -39,6 +39,11 @@ if ! command -v brew >/dev/null 2>&1; then
     exit 0
 fi
 
+# Get the real Homebrew prefix rather than hardcoding it: it is
+# /home/linuxbrew/.linuxbrew on x86 but /opt/homebrew on Apple Silicon, so a
+# hardcoded path would fail the write-permission check on the latter.
+BREW_PREFIX="$(brew --prefix 2>/dev/null || echo /home/linuxbrew/.linuxbrew)"
+
 # Guard: user must have write access to the Homebrew prefix
 if [[ ! -w "${BREW_PREFIX}" ]]; then
     echo "Warning: user lacks write permission to ${BREW_PREFIX} — skipping Framework setup"
