@@ -55,11 +55,12 @@ policy for changing them.
   - `[services]` — desktop services Bluefin adds on top of the server base.
     A service or config package that ships its own systemd unit or generator
     config (e.g. `zram-generator-defaults` installs
-    `/usr/lib/systemd/zram-generator.conf.d/zram-generator-defaults.conf`)
-    needs only a manifest entry: the generator reads that path at boot, so no
-    `system_files/` staging and no enablement in `scripts/configure-services.sh`
-    are required. This is how bare-metal swap was wired for #384 — the swap is
-    enabled by the package's own config, not by Utah. A package that ships
+    `/usr/lib/systemd/zram-generator.conf`) needs only a manifest entry: the
+    generator reads that path at boot, so no `system_files/` staging and no
+    enablement in `scripts/configure-services.sh` are required. This is how
+    bare-metal swap was wired for #384 — the swap is enabled by the package's
+    own config, not by Utah. To override or disable it, drop an
+    `/etc/systemd/zram-generator.conf` (empty disables). A package that ships
     nothing but a binary and needs a unit started still needs the enablement in
     `configure-services.sh`, like the other `[services]` entries.
   - `[unavailable]` — Bluefin contract packages none of Utah's repositories

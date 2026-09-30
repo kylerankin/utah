@@ -284,12 +284,13 @@ packages = [
 # zram-generator + zram-generator-defaults are the bare-metal swap (#384). The
 # audit found swapon -s empty and zramctl showing nothing: the server base
 # ships no swap at all. zram-generator-defaults ships
-# /usr/lib/systemd/zram-generator.conf.d/zram-generator-defaults.conf, which the
-# generator reads at boot, so installing the two packages both adds the swap
-# and enables the generator -- one zram device at half of RAM. That is exactly
-# what Bluefin ships (it has no custom zram config of its own), so the fraction
-# is the package default, not something restated here. systemd-oomd-defaults is
-# a related memory-pressure follow-up left out on purpose (see PR body).
+# /usr/lib/systemd/zram-generator.conf, which the generator reads at boot, so
+# installing the two packages both adds the swap and enables the generator --
+# one zram device sized zram-size = min(ram, 8192), i.e. all of RAM capped at
+# 8 GiB. That is exactly what Bluefin ships (it has no custom zram config of
+# its own), so the size is the package default, not something restated here.
+# systemd-oomd-defaults is a related memory-pressure follow-up left out on
+# purpose (see PR body).
 packages = [
     "cryptsetup",
     "flatpak",
