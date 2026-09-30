@@ -139,6 +139,52 @@ class VerifyValuesTests(unittest.TestCase):
         self.assertEqual(desktop.verify_values("x", {"n": 51}, {}, {"n": r"\d+"}), [])
 
 
+class BaseOsReleaseIdentityTests(unittest.TestCase):
+    """Issue #377: keep ID, VERSION_ID and CPE_NAME on the Hummingbird base so
+    CVE scanners still recognise the image as Fedora-based. The script stops
+    rewriting those fields; the contract must assert the base values instead of
+    the utah-branded ones."""
+
+    def shipped_os_release(self):
+        import tomllib
+
+        data = tomllib.loads((ROOT / "contracts/bluefin-desktop.toml").read_text())
+        return data["branding"]["os_release"], data["branding"]["os_release_patterns"]
+
+    def test_exact_id_assertion_is_the_base_fedora(self):
+        exact, _ = self.shipped_os_release()
+        # The base ships ID=fedora; the contract must assert that, not utah.
+        self.assertEqual(
+            desktop.verify_values("os-release", {"ID": "fedora"}, {"ID": exact["ID"]}, {}),
+            [],
+        )
+        self.assertEqual(
+            len(desktop.verify_values("os-release", {"ID": "utah"}, {"ID": exact["ID"]}, {})),
+            1,
+        )
+
+    def test_cpe_pattern_accepts_base_cpe_and_rejects_utah_cpe(self):
+        _, patterns = self.shipped_os_release()
+        cpe_pattern = {"CPE_NAME": patterns["CPE_NAME"]}
+        # A real Fedora CPE passes; the old utah-branded CPE no longer matches.
+        self.assertEqual(
+            desktop.verify_values("os-release", {"CPE_NAME": "cpe:/o:fedoraproject:fedora:41"}, {}, cpe_pattern),
+            [],
+        )
+        self.assertEqual(
+            len(
+                desktop.verify_values(
+                    "os-release", {"CPE_NAME": "cpe:/o:universal-blue:utah"}, {}, cpe_pattern
+                )
+            ),
+            1,
+        )
+
+    def test_contract_no_longer_pins_the_utah_cpe_as_exact(self):
+        exact, _ = self.shipped_os_release()
+        self.assertNotIn("CPE_NAME", exact)
+
+
 class ParseBrewfileTests(unittest.TestCase):
     def parse(self, text):
         with tempfile.TemporaryDirectory() as tmp:
