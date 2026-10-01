@@ -28,8 +28,8 @@ Three partitions, named for where a fix would land:
                            [unavailable] with a tracking issue.
 
 The script also writes baselines/audit-baseline.json so the gap can only grow
-deliberately. `just check` runs `audit-bluefin-parity --check` and the recipe
-fails when any partition grows.
+deliberately. `just audit-bluefin-parity --check` compares against that
+baseline and fails when any partition grows.
 
 Example
   just audit-bluefin-parity               # partition, print, do not write
