@@ -170,13 +170,23 @@ def installed(packages: list[str]) -> list[str]:
 # markers are what separate "the package exists and installs" from "the
 # package is absent or its dependencies cannot be met": the absence is what
 # an [unavailable] entry must keep showing.
+# "Error:"/"Failed to" are environment failures (unreachable repo, broken
+# mount, failed download): they mean the check could not run, not that the
+# package is unavailable. "No match"/"nothing provides" are the genuine signal
+# an [unavailable] entry must keep showing.
 _UNAVAILABLE_ERROR_RE = re.compile(
     r"No match for argument|nothing provides|conflicting requests|cannot install both"
-    r"|Error:|Failed to"
 )
+_ENVIRONMENT_ERROR_RE = re.compile(r"Error:|Failed to")
 _UNAVAILABLE_SUMMARY_RE = re.compile(
     r"(?m)^Transaction Summary:?\s*$|^Nothing to do\.?\s*$"
 )
+
+
+class _RepoError(Exception):
+    """A package check could not run: the repository environment is broken
+    (unreachable, bad repodata, failed download). Raised so the gate fails
+    closed instead of reading the failure as an unavailable package."""
 
 
 def is_installable(dnf: str, name: str, repos: tuple[str, ...]) -> bool:
@@ -184,7 +194,11 @@ def is_installable(dnf: str, name: str, repos: tuple[str, ...]) -> bool:
     Transaction Summary with no match or dependency error. The --assumeno run
     declines the install, so dnf exits nonzero for a valid transaction; a
     missing package or broken dependency is rejected explicitly rather than
-    accepted as that decline."""
+    accepted as that decline.
+
+    Raises _RepoError when the check cannot run at all (unreachable repo,
+    broken mount, failed download): that is an environment failure that must
+    fail the gate, never masquerade as a deliberate [unavailable] gap."""
     out = subprocess.run(
         [dnf, "--assumeno", "--disablerepo=*",
          *(f"--enablerepo={r}" for r in repos),
@@ -192,6 +206,8 @@ def is_installable(dnf: str, name: str, repos: tuple[str, ...]) -> bool:
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         env={**os.environ, "LC_ALL": "C"}, check=False,
     )
+    if _ENVIRONMENT_ERROR_RE.search(out.stdout) or out.returncode == 125:
+        raise _RepoError(out.stdout.strip() or f"dnf exited {out.returncode}")
     return (
         out.returncode in (0, 1)
         and not _UNAVAILABLE_ERROR_RE.search(out.stdout)
@@ -211,7 +227,19 @@ def assert_unavailable(dnf: str, repos: tuple[str, ...], overlay: Path) -> int:
     if not unavailable:
         print("No [unavailable] entries; nothing to assert")
         return 0
-    installable = [name for name in unavailable if is_installable(dnf, name, repos)]
+    installable = []
+    for name in unavailable:
+        try:
+            wanted = is_installable(dnf, name, repos)
+        except _RepoError as error:
+            # The environment could not be queried; fail the gate rather than
+            # read the failure as "this entry stays unavailable".
+            print(f"ERROR: repository check failed for {name!r} ({error}); "
+                  f"cannot confirm this [unavailable] entry is still unavailable",
+                  file=sys.stderr)
+            return 1
+        if wanted:
+            installable.append(name)
     if installable:
         print(f"ERROR: {len(installable)} [unavailable] entry(ies) are now installable:",
               file=sys.stderr)

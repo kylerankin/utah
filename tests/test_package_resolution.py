@@ -282,17 +282,22 @@ class UnavailableDriftTests(unittest.TestCase):
                           return_value=subprocess.CompletedProcess([], 1, stdout="nothing provides libmissing.so.1\n")):
             self.assertFalse(installer.is_installable("dnf5", "pkg", ("utah-packages",)))
 
-    def test_repository_error_is_not_installable(self):
+    def test_repository_error_raises(self):
+        # "Error:"/"Failed to" mean the check could not run (unreachable repo,
+        # broken mount): is_installable raises so the gate fails closed rather
+        # than reading the failure as "this entry stays unavailable".
         with patch.object(installer.subprocess, "run",
                           return_value=subprocess.CompletedProcess([], 1, stdout="Error: Failed to download metadata\n")):
-            self.assertFalse(installer.is_installable("dnf5", "pkg", ("utah-packages",)))
+            with self.assertRaises(installer._RepoError):
+                installer.is_installable("dnf5", "pkg", ("utah-packages",))
 
-    def test_unexpected_exit_code_is_not_installable(self):
-        # A non-(0,1) exit code fails even with a present summary: a registry or
-        # engine error must never be read as "installable".
+    def test_unexpected_exit_code_raises(self):
+        # A 125 exit code is a dnf/engine error, not a declined transaction:
+        # raise so the environment failure is never read as installable.
         with patch.object(installer.subprocess, "run",
                           return_value=subprocess.CompletedProcess([], 125, stdout="Transaction Summary:\nInstall 1 Packages\n")):
-            self.assertFalse(installer.is_installable("dnf5", "pkg", ("utah-packages",)))
+            with self.assertRaises(installer._RepoError):
+                installer.is_installable("dnf5", "pkg", ("utah-packages",))
 
     def test_assert_unavailable_empty_overlay_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -321,6 +326,18 @@ class UnavailableDriftTests(unittest.TestCase):
             self.assertIn("1 [unavailable]", text)
             self.assertIn("now-here", text)
             self.assertIn("packages/utah.toml", text)
+
+    def test_assert_unavailable_environment_error_fails(self):
+        # When the repository cannot be queried, the gate must fail (exit 1),
+        # not report every entry as still unavailable and pass silently.
+        with tempfile.TemporaryDirectory() as tmp:
+            overlay = Path(tmp) / "utah.toml"
+            overlay.write_text('[unavailable]\npackages=["ghost-a"]\n')
+            err = io.StringIO()
+            with patch.object(installer.subprocess, "run",
+                              return_value=subprocess.CompletedProcess([], 1, stdout="Error: Failed to download metadata\n")), contextlib.redirect_stderr(err):
+                self.assertEqual(installer.assert_unavailable("dnf5", ("utah-packages",), overlay), 1)
+            self.assertIn("repository check failed", err.getvalue())
 
 
 class ParityContractTests(unittest.TestCase):
