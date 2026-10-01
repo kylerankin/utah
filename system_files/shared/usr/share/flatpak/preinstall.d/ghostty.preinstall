@@ -13,6 +13,16 @@
 # preinstall.d has no key naming a remote; flatpak tries every configured
 # remote (or only those whose collection ID matches CollectionID). Only TunaOS
 # carries this app, and only on its master branch.
+#
+# That resolution is remote-wide, not per-entry: with tuna-os now permanently
+# configured on installed systems, any collection-less entry here or in
+# brewfile.preinstall is resolvable from it, and only flathub coming first in
+# the remote list keeps a Flathub app id resolving to Flathub. CollectionID
+# would narrow it, but Utah's Flathub remote has none (an entry naming a
+# collection no remote carries is silently skipped -- the bazaar.preinstall
+# bug this file's sibling fixes), and an OCI remote has none to name either.
+# Nothing TunaOS publishes shadows the Brewfile set today; if that changes,
+# the fix is a Flathub remote with its collection ID set, not a key here.
 [Flatpak Preinstall com.mitchellh.ghostty]
 Branch=master
 IsRuntime=false

@@ -25,7 +25,9 @@ set -euo pipefail
 # for the same reason. flatpak resumes a partial pull from the local repository,
 # so a retry re-fetches only what is still missing. The installer install
 # carries --or-update (idempotent); the default-flatpaks path uses
-# `flatpak preinstall`, whose preinstalled marks make a retry a no-op too.
+# `flatpak preinstall`, whose preinstalled marks make a retry a no-op too --
+# but preinstall exits 0 on a flaked ref, so that path is retried on its own
+# verification result rather than through retry_flatpak (see the loop below).
 # 3 attempts stopped being enough: post-testing-e2e run 36230660725 lost
 # utah to dl.flathub.org [28] timeouts on all 3 attempts spread over
 # ~20 minutes (thunderbird, then org.gnome.Platform), with nothing wrong
@@ -158,18 +160,39 @@ if (( ${#declared[@]} == 0 )); then
     echo "No Flatpaks declared in ${PREINSTALL_DIR}; the image's preinstall.d is broken" >&2
     exit 1
 fi
-retry_flatpak preinstall --system --noninteractive -y --no-related
+#
 # `flatpak preinstall` skips a ref no remote resolves -- a wrong Branch, a
-# CollectionID no configured remote carries, a remote whose metadata fetch
-# timed out -- and still exits 0. That is how bazaar.preinstall's
-# CollectionID=org.flathub.Stable went unnoticed. A missing default Flatpak is
-# a build failure, never a silent skip.
+# CollectionID no configured remote carries, a remote whose summary or OCI
+# index fetch timed out -- and still exits 0 (a g_warning, then on to the next
+# entry). That is how bazaar.preinstall's CollectionID=org.flathub.Stable went
+# unnoticed. A missing default Flatpak is a build failure, never a silent skip
+# -- but it is also the flake class retry_flatpak exists for, so a zero exit
+# from preinstall is not the thing worth retrying: the verification below is.
+# Install and verification therefore loop together. Retrying preinstall alone
+# would have turned a flaked remote-metadata fetch into one unretried failure,
+# which is exactly how the Ghostty pull from tuna-os used to be covered.
 missing=()
-for id in "${declared[@]}"; do
-    flatpak info --system "${id}" >/dev/null 2>&1 || missing+=("${id}")
+check_missing() {
+    local id
+    missing=()
+    for id in "${declared[@]}"; do
+        flatpak info --system "${id}" >/dev/null 2>&1 || missing+=("${id}")
+    done
+}
+max_attempts=5
+for (( attempt = 1; attempt <= max_attempts; attempt++ )); do
+    flatpak preinstall --system --noninteractive -y --no-related \
+        || echo "flatpak preinstall attempt ${attempt} of ${max_attempts} failed" >&2
+    check_missing
+    (( ${#missing[@]} == 0 )) && break
+    echo "declared but not installed after attempt ${attempt} of ${max_attempts}: ${missing[*]}" >&2
+    if (( attempt < max_attempts )); then
+        sleep $(( attempt * 30 ))
+    fi
 done
 if (( ${#missing[@]} > 0 )); then
-    echo "ERROR: declared in ${PREINSTALL_DIR} but not installed: ${missing[*]}" >&2
+    echo "ERROR: declared in ${PREINSTALL_DIR} but not installed after" \
+        "${max_attempts} attempts: ${missing[*]}" >&2
     exit 1
 fi
 
