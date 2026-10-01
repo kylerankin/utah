@@ -275,9 +275,10 @@ disposable LUKS2 disk from the embedded payload, boots without the ISO,
 unlocks the disk, confirms `bootc status` reports the offline embedded
 payload (not a network pull) on a guest with no route out, and checks
 graphical login and extension states. A trailing check, after login,
-confirms every default Flatpak in the Brewfile contract is also present
-offline -- deferred past login because it deploys asynchronously on first
-boot. Both gates have escape hatches for unblocking a promotion when the
+confirms every default Flatpak the image declares in
+`/usr/share/flatpak/preinstall.d` -- the Brewfile parity set plus Utah's own
+additions, Ghostty among them -- is also present offline, deferred past login
+because it deploys asynchronously on first boot. Both gates have escape hatches for unblocking a promotion when the
 gate itself, rather than the image, is at fault: `UTAH_E2E_FLATPAKS` sets the
 expected Flatpak set directly (empty skips the check), and
 `UTAH_E2E_PAYLOAD_CHECK=""` skips the booted-image assertion. The booted-image
