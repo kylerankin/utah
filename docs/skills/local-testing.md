@@ -220,6 +220,17 @@ so no entry may carry one, and Ghostty is on TunaOS's `master` branch only.
 The TunaOS remote descriptor is vendored at
 `system_files/shared/etc/flatpak/remotes.d/tuna-os.flatpakrepo`, never fetched.
 
+`flatpak preinstall` marks every ref it installs as preinstalled in
+`/var/lib/flatpak`, and fisherman copies that state onto disk, so the marks
+survive into installed systems. Upstream then treats preinstall.d as the
+authoritative set: a marked ref that a later image no longer declares is
+uninstalled on the next `flatpak-preinstall.service` run. Dropping an app from
+the Brewfile (or from a `*.preinstall` file) therefore removes it from existing
+installs, including copies users kept deliberately. That is intended flatpak
+semantics, but it only takes effect now that the declared entries resolve, so
+treat Brewfile removals as user-visible uninstalls rather than build-only
+changes.
+
 ## Tacklebox ISOs (unpublished variants)
 
 `just iso-tacklebox` builds a live ISO via
