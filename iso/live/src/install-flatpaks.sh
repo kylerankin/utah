@@ -23,14 +23,15 @@ set -euo pipefail
 #
 # after 3m44s, with nothing wrong in the image. The curl above already retries
 # for the same reason. flatpak resumes a partial pull from the local repository,
-# so a retry re-fetches only what is still missing, and every install below
-# passes --or-update, which makes a retry a no-op for refs already complete.
+# so a retry re-fetches only what is still missing. The installer install
+# carries --or-update (idempotent); the default-flatpaks path uses
+# `flatpak preinstall`, whose preinstalled marks make a retry a no-op too.
 # 3 attempts stopped being enough: post-testing-e2e run 36230660725 lost
 # utah to dl.flathub.org [28] timeouts on all 3 attempts spread over
 # ~20 minutes (thunderbird, then org.gnome.Platform), with nothing wrong
 # in the image. 5 attempts at ~6 minutes each plus backoff covers a
-# ~35-minute outage window; flatpak resumes partial pulls, and --or-update
-# below keeps every retry a no-op for refs already complete.
+# ~35-minute outage window; flatpak resumes partial pulls, and both the
+# --or-update installer and the preinstall marks keep every retry a no-op.
 retry_flatpak() {
     local attempt max_attempts=5
     for (( attempt = 1; attempt <= max_attempts; attempt++ )); do
