@@ -312,6 +312,7 @@ packages = [
 #   Rawhide -- so the buildroot cannot satisfy them. Building fish needs a
 #   vendored/cargo-fetch rebuild of the spec rather than the system-crate
 #   model.
+#   Tracked by #419.
 #
 # zsh
 #   The HTML docs build target pulls texi2html, which drags Fedora's ruby
