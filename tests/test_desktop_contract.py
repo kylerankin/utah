@@ -151,11 +151,11 @@ class BaseOsReleaseIdentityTests(unittest.TestCase):
         data = tomllib.loads((ROOT / "contracts/bluefin-desktop.toml").read_text())
         return data["branding"]["os_release"], data["branding"]["os_release_patterns"]
 
-    def test_exact_id_assertion_is_the_base_fedora(self):
+    def test_exact_id_assertion_is_the_base_hummingbird(self):
         exact, _ = self.shipped_os_release()
-        # The base ships ID=fedora; the contract must assert that, not utah.
+        # The base ships ID=hummingbird; the contract must assert that, not utah.
         self.assertEqual(
-            desktop.verify_values("os-release", {"ID": "fedora"}, {"ID": exact["ID"]}, {}),
+            desktop.verify_values("os-release", {"ID": "hummingbird"}, {"ID": exact["ID"]}, {}),
             [],
         )
         self.assertEqual(
@@ -166,9 +166,9 @@ class BaseOsReleaseIdentityTests(unittest.TestCase):
     def test_cpe_pattern_accepts_base_cpe_and_rejects_utah_cpe(self):
         _, patterns = self.shipped_os_release()
         cpe_pattern = {"CPE_NAME": patterns["CPE_NAME"]}
-        # A real Fedora CPE passes; the old utah-branded CPE no longer matches.
+        # A real Hummingbird CPE passes; the utah-branded CPE no longer matches.
         self.assertEqual(
-            desktop.verify_values("os-release", {"CPE_NAME": "cpe:/o:fedoraproject:fedora:41"}, {}, cpe_pattern),
+            desktop.verify_values("os-release", {"CPE_NAME": "cpe:/a:redhat:hummingbird:1"}, {}, cpe_pattern),
             [],
         )
         self.assertEqual(

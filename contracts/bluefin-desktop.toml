@@ -17,7 +17,7 @@ files = [
 
 [branding.os_release]
 NAME = "Utah"
-ID = "fedora"
+ID = "hummingbird"
 ID_LIKE = "fedora"
 HOME_URL = "https://projectbluefin.io"
 DOCUMENTATION_URL = "https://docs.projectbluefin.io"
@@ -32,9 +32,9 @@ PRETTY_NAME = '^Utah \(Version: .+\)$'
 VERSION = '^.+ \(Hummingbird\)$'
 VARIANT_ID = '^utah(-.*)?$'
 # ID, VERSION_ID and CPE_NAME are left at the Hummingbird base values so CVE
-# scanners still recognise the image as Fedora-based; this pattern asserts the
-# base CPE identity survives rather than pinning a per-release CPE string.
-CPE_NAME = '^cpe:/o:fedoraproject:fedora:\d+$'
+# scanners still recognise the image as Hummingbird-based; this pattern asserts
+# the base CPE identity survives rather than pinning a per-release CPE string.
+CPE_NAME = '^cpe:/a:redhat:hummingbird:\d+$'
 OSTREE_VERSION = '^.+$'
 IMAGE_VERSION = '^.+$'
 BUILD_ID = '^.+$'
