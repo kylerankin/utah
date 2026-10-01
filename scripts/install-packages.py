@@ -206,11 +206,18 @@ def is_installable(dnf: str, name: str, repos: tuple[str, ...]) -> bool:
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         env={**os.environ, "LC_ALL": "C"}, check=False,
     )
+    if _UNAVAILABLE_ERROR_RE.search(out.stdout):
+        # A missing package or dependency conflict is genuinely unavailable:
+        # check this before the environment regex, because dnf5 reports a
+        # missing package as "Failed to resolve the transaction:" (which also
+        # matches _ENVIRONMENT_ERROR_RE). Treating the unavailable marker first
+        # keeps a real [unavailable] entry from being misread as an environment
+        # error that fails the gate.
+        return False
     if _ENVIRONMENT_ERROR_RE.search(out.stdout) or out.returncode == 125:
         raise _RepoError(out.stdout.strip() or f"dnf exited {out.returncode}")
     return (
         out.returncode in (0, 1)
-        and not _UNAVAILABLE_ERROR_RE.search(out.stdout)
         and re.search(_UNAVAILABLE_SUMMARY_RE, out.stdout)
     )
 

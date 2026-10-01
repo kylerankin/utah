@@ -282,6 +282,16 @@ class UnavailableDriftTests(unittest.TestCase):
                           return_value=subprocess.CompletedProcess([], 1, stdout="nothing provides libmissing.so.1\n")):
             self.assertFalse(installer.is_installable("dnf5", "pkg", ("utah-packages",)))
 
+    def test_dnf5_resolve_failure_is_not_installable(self):
+        # dnf5 reports a missing package as "Failed to resolve the transaction:"
+        # which also matches _ENVIRONMENT_ERROR_RE. The unavailable marker is
+        # checked first, so this is a genuinely unavailable entry, not an
+        # environment error -- it must return False, not raise _RepoError.
+        with patch.object(installer.subprocess, "run",
+                          return_value=subprocess.CompletedProcess([], 1,
+                            stdout="Failed to resolve the transaction:\nNo match for argument: firefox\n")):
+            self.assertFalse(installer.is_installable("dnf5", "firefox", ("utah-packages",)))
+
     def test_repository_error_raises(self):
         # "Error:"/"Failed to" mean the check could not run (unreachable repo,
         # broken mount): is_installable raises so the gate fails closed rather
