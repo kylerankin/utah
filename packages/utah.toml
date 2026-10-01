@@ -306,13 +306,11 @@ packages = [
 #   #10.
 #
 # fish
-#   Fedora's fish spec uses %cargo_generate_buildrequires, which requires
-#   every Rust crate as a system RPM (rust-anstyle, rust-clap, ...). Fedora
-#   44 does not ship Rust crate binary packages -- they exist only in
-#   Rawhide -- so the buildroot cannot satisfy them. Building fish needs a
-#   vendored/cargo-fetch rebuild of the spec rather than the system-crate
-#   model.
-#   Tracked by #419.
+#   Bluefin classic shipped an every-shell set; Utah does not repeat that.
+#   fish is deliberately excluded from the image
+#   (docs/bluefin-package-gaps.md D3) -- the factory builds it and it
+#   resolves, so this is a policy exclusion and not a build block. Users who
+#   want fish install it from Homebrew. Tracked by #419.
 #
 # zsh
 #   The HTML docs build target pulls texi2html, which drags Fedora's ruby
