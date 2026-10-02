@@ -281,6 +281,29 @@ The daemon (`fwupd.service`) is unaffected: it runs as root with no
 flashing still goes through the daemon, which keeps its existing root
 lifecycle. The pairing is asserted by `FwupdRefreshDropInTests` in
 `tests/test_desktop_contract.py`.
+## First-boot hooks are validated at runtime
+
+The privileged-setup hooks run at first boot and had no coverage, so a hook
+invoking a missing binary or directory could fail the first boot without CI
+noticing. `tests/test_first_boot.py` exercises the real hooks against a stubbed
+`libsetup.sh` and stubbed userland (no root, no image build):
+
+- **`10-tailscale.sh`** defers when the `tailscale` binary is absent instead of
+  failing the hook, and defers the operator grant until a real calling UID
+  (`PKEXEC_UID`) exists so it never grants the operator role to root. The
+  `version-script` stamp is idempotent, so a later tailscale install completes
+  the grant on the next boot rather than re-granting.
+- **`99-flatpaks.sh`** skips the Firefox default-preferences copy when
+  `firefox-config` is absent instead of failing on a glob that matches nothing.
+- The enablement policy is asserted in the preset and the desktop contract:
+  `bluefin-stats-refresh.timer` and `input-remapper.service` must be enabled.
+
+The tailscale hook sources `libsetup.sh` from a hardcoded absolute path, so the
+test runs a byte-for-byte copy with only that one line rewritten to a sandbox
+stub; `PATH` is the sandbox only and `bash` is invoked by absolute path, so the
+stubs fully shadow the real userland and a deliberately-absent binary is truly
+absent. This runs inside `just check` (the test module is auto-discovered), so
+the defer-and-idempotency behavior fails the build if it regresses.
 
 ## The verifiers run twice
 
