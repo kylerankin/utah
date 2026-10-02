@@ -174,7 +174,7 @@ class BaselineTests(unittest.TestCase):
             "factory-built": ["modem"],
             "nowhere": ["obscure", "libgda"],
         }
-        msgs = audit.compare_to_baseline(new, baseline)
+        msgs = audit.compare_to_baseline(new, baseline, "deadbeef", "registry/name@sha256:abc")
         self.assertEqual(msgs, ["nowhere: +1 ['libgda']"])
 
     def test_compare_silent_when_no_growth(self):
@@ -188,7 +188,9 @@ class BaselineTests(unittest.TestCase):
             "factory-built": ["router"],
             "nowhere": ["obscure"],
         }
-        self.assertEqual(audit.compare_to_baseline(new, baseline), [])
+        self.assertEqual(
+            audit.compare_to_baseline(new, baseline, "deadbeef", "registry/name@sha256:abc"), []
+        )
 
     def test_compare_reports_shrink_as_noop(self):
         # A name dropping from a partition because the operator closed
@@ -203,7 +205,9 @@ class BaselineTests(unittest.TestCase):
             "factory-built": ["modem"],
             "nowhere": ["obscure"],
         }
-        self.assertEqual(audit.compare_to_baseline(new, baseline), [])
+        self.assertEqual(
+            audit.compare_to_baseline(new, baseline, "deadbeef", "registry/name@sha256:abc"), []
+        )
 
     def test_compare_reports_regression_in_every_partition(self):
         # A brand-new name in any partition is a regression; the gate
@@ -219,7 +223,7 @@ class BaselineTests(unittest.TestCase):
             "factory-built": ["modem", "modem-new"],
             "nowhere": ["obscure", "nowhere-new"],
         }
-        msgs = audit.compare_to_baseline(new, baseline)
+        msgs = audit.compare_to_baseline(new, baseline, "deadbeef", "registry/name@sha256:abc")
         self.assertEqual(len(msgs), 3)
         self.assertIn("hummingbird-available: +1 ['shell-new']", msgs)
         self.assertIn("factory-built: +1 ['modem-new']", msgs)
@@ -434,6 +438,85 @@ class RecipeArgForwardingTests(unittest.TestCase):
         body = self._rendered_body("check-audit-parity", "--ref=HEAD")
         self.assertIn("for arg in --ref=HEAD", body)
         self.assertNotIn('"$@"', body)
+
+
+class StaleBaselineTests(unittest.TestCase):
+    # The gate this issue fixes: compare_to_baseline must fail on a baseline
+    # captured against a different Bluefin ref or factory pin, not pass
+    # silently against an unchanged package set.
+
+    BASELINE = {
+        "ref": "old-bluefin",
+        "factory_ref": "old-factory",
+        "hummingbird-available": ["a", "b"],
+        "factory-built": ["c"],
+        "nowhere": [],
+    }
+
+    # The same package set a later audit reads.
+    SAME = {
+        "hummingbird-available": ["a", "b"],
+        "factory-built": ["c"],
+        "nowhere": [],
+    }
+
+    def test_matching_refs_pass_with_no_messages(self):
+        self.assertEqual(
+            audit.compare_to_baseline(self.SAME, self.BASELINE, "old-bluefin", "old-factory"),
+            [],
+        )
+
+    def test_a_bluefin_ref_bump_is_reported_not_a_clean_run(self):
+        # The bug: same packages, only the Bluefin ref changed. Without the
+        # ref comparison this returns [] and the stale baseline passes.
+        msgs = audit.compare_to_baseline(
+            self.SAME, self.BASELINE, "new-bluefin", "old-factory"
+        )
+        self.assertEqual(len(msgs), 1)
+        self.assertIn("stale baseline: ref", msgs[0])
+        self.assertIn("new-bluefin", msgs[0])
+
+    def test_a_factory_pin_bump_is_reported(self):
+        msgs = audit.compare_to_baseline(
+            self.SAME, self.BASELINE, "old-bluefin", "new-factory"
+        )
+        self.assertEqual(len(msgs), 1)
+        self.assertIn("factory_ref", msgs[0])
+
+    def test_both_ref_and_factory_bumps_are_both_reported(self):
+        msgs = audit.compare_to_baseline(
+            self.SAME, self.BASELINE, "new-bluefin", "new-factory"
+        )
+        self.assertEqual(len(msgs), 2)
+        self.assertTrue(all("stale baseline" in m for m in msgs))
+
+    def test_an_old_baseline_without_meta_is_not_flagged_stale(self):
+        # A baseline written before the ref/factory_ref meta existed has no
+        # keys to compare; the gate must not invent a mismatch against them.
+        legacy = {k: v for k, v in self.BASELINE.items() if k not in ("ref", "factory_ref")}
+        self.assertEqual(
+            audit.compare_to_baseline(self.SAME, legacy, "any-ref", "any-factory"), []
+        )
+
+    def test_a_real_regression_still_fails_when_refs_match(self):
+        grew = dict(self.SAME)
+        grew["hummingbird-available"] = ["a", "b", "brand-new"]
+        msgs = audit.compare_to_baseline(
+            grew, self.BASELINE, "old-bluefin", "old-factory"
+        )
+        self.assertEqual(len(msgs), 1)
+        self.assertIn("brand-new", msgs[0])
+
+    def test_a_stale_baseline_is_reported_before_any_partition_growth(self):
+        # The stale-baseline verdict must never be masked by, or buried under,
+        # a growth report: it comes first in the message list.
+        grew = dict(self.SAME)
+        grew["nowhere"] = ["brand-new"]
+        msgs = audit.compare_to_baseline(
+            grew, self.BASELINE, "new-bluefin", "old-factory"
+        )
+        self.assertIn("stale baseline: ref", msgs[0])
+        self.assertEqual(len(msgs), 2)
 
 
 if __name__ == "__main__":

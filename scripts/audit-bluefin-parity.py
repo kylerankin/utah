@@ -435,7 +435,8 @@ def baseline_record(parts: dict[str, list[str]], ref: str, factory_ref: str,
     }
 
 
-def compare_to_baseline(parts: dict[str, list[str]], baseline: dict) -> list[str]:
+def compare_to_baseline(parts: dict[str, list[str]], baseline: dict, ref: str,
+                        factory_ref: str) -> list[str]:
     """Diff each partition against the recorded baseline.
 
     A name migrating between partitions is celebrated as a rebuild
@@ -448,14 +449,39 @@ def compare_to_baseline(parts: dict[str, list[str]], baseline: dict) -> list[str
     Shrinks are a no-op: a name dropping from a partition because the
     gap closed (move to [parity] / [hardware] / etc.) is the operator's
     intent, not a regression.
+
+    The baseline records the `ref` and `factory_ref` it was captured
+    against (see `baseline_record`). Those are what make the partition
+    lists comparable: two audits only describe the same package set when
+    they were read against the same Bluefin ref and factory pin. A Bluefin
+    ref or factory-pin bump that leaves the partition lists unchanged would
+    otherwise read as "no growth" and pass silently -- the baseline is
+    stale, it is not confirming the debt. Surface that mismatch first, so
+    the operator rewrites the baseline against the new ref instead of
+    trusting a verdict captured under a different one.
     """
+    msgs: list[str] = []
+
+    # A ref mismatch means the partition lists are not comparable to the
+    # baseline at all, regardless of whether they grew. Report it before
+    # the partition diff so the stale-baseline verdict is never masked by
+    # (or buried under) a growth report.
+    ref_changes = (
+        ("ref", ref, baseline.get("ref")),
+        ("factory_ref", factory_ref, baseline.get("factory_ref")),
+    )
+    for key, current, recorded in ref_changes:
+        if recorded is not None and recorded != current:
+            msgs.append(
+                f"stale baseline: {key} changed from {recorded!r} to {current!r}"
+            )
+
     old_names_by_partition: dict[str, set[str]] = {
         partition: set(baseline.get(partition, []))
         for partition in ("hummingbird-available", "factory-built", "nowhere")
     }
     all_old = set().union(*old_names_by_partition.values())
 
-    msgs: list[str] = []
     for partition_name in ("hummingbird-available", "factory-built", "nowhere"):
         old = old_names_by_partition[partition_name]
         new = set(parts[partition_name])
@@ -605,8 +631,8 @@ def cmd_check(args) -> int:
               file=sys.stderr)
         return 2
 
-    ref, parts, *_ = fetch_partition(args)
-    growth = compare_to_baseline(parts, baseline)
+    ref, parts, _, _, factory_ref, _ = fetch_partition(args)
+    growth = compare_to_baseline(parts, baseline, ref, factory_ref)
     if growth:
         for msg in growth:
             print(f"ERROR: {msg}", file=sys.stderr)

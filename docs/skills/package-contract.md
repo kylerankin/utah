@@ -256,6 +256,15 @@ landing and is silent. A name disappearing from the baseline (an operator
 moved it into `[parity]` and closed the gap) is silent too — only new
 names that did not exist anywhere in the baseline trigger the gate.
 
+The baseline records the Bluefin ref and factory pin it was captured
+against (`ref` / `factory_ref` in the JSON). `check` compares those back
+against the current audit before it diffs the partitions: a Bluefin-ref or
+factory-pin bump that leaves the package set unchanged would otherwise read
+as "no growth" and pass silently, so it is reported as a stale baseline
+instead. Rewrite the baseline against the new ref with `--write` before the
+gate can meaningfully run. A stale-baseline verdict is reported before any
+partition-growth message, so it is never masked by a growth report.
+
 Bootstrap is a one-time manual command: on a fresh checkout where
 `baselines/audit-baseline.json` is missing, `just check-audit-parity`
 exits 2 with a clear message; running `just audit-bluefin-parity --write`
