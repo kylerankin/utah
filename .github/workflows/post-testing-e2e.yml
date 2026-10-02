@@ -60,7 +60,7 @@ jobs:
             | (if length == 0 then "" else ": \(join(", "))" end)' \
             <<< "$suites_json")
           if [ -n "$missing" ]; then
-            echo "::error::gate: no published exact-digest for flavor(s)$missing — promotion would boot an empty image"
+            echo "::error::gate: no published exact-digest for flavor(s): $missing — promotion would boot an empty image"
             exit 1
           fi
           {
