@@ -361,7 +361,7 @@ def main() -> int:
     major = fedora_major()
 
     if args.assert_unavailable:
-        return assert_unavailable(dnf, repos, args.manifest)
+        return assert_unavailable(dnf, repos, overlay)
 
     packages = contract(args.manifest, overlay, major)
     build_deps = section(overlay, "build")

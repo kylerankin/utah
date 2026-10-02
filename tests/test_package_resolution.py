@@ -349,6 +349,27 @@ class UnavailableDriftTests(unittest.TestCase):
                 self.assertEqual(installer.assert_unavailable("dnf5", ("utah-packages",), overlay), 1)
             self.assertIn("repository check failed", err.getvalue())
 
+    def test_main_assert_unavailable_reads_overlay_not_manifest(self):
+        # Regression: main() passed args.manifest to assert_unavailable, which
+        # reads the [unavailable] section. The manifest has no [unavailable]
+        # section, so the gate trivially passed (a no-op). It must read the
+        # overlay, where the section actually lives.
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "bluefin.toml"
+            overlay = Path(tmp) / "utah.toml"
+            manifest.write_text('[fedora]\npackages=["base"]\n')
+            overlay.write_text('[unavailable]\npackages=["now-here"]\n')
+            with patch("sys.argv", ["install-packages", "--assert-unavailable", str(manifest), str(overlay)]), \
+                 patch.object(installer, "dnf_path", return_value="dnf5"), \
+                 patch.object(installer, "fedora_major", return_value="44"), \
+                 patch.object(installer, "install_repos",
+                              return_value=("utah-packages", "public-hummingbird-x86_64-rpms")), \
+                 self._mock_dnf({"now-here"}), \
+                 contextlib.redirect_stderr(io.StringIO()) as err:
+                rc = installer.main()
+            self.assertEqual(rc, 1)
+            self.assertIn("now-here", err.getvalue())
+
 
 class ParityContractTests(unittest.TestCase):
     MANIFEST = ROOT / "packages/bluefin.toml"
