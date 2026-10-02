@@ -5,15 +5,18 @@ The hook copies ublue-os Firefox defaults into the system flatpak's
 files from a previous image so a dropped config cannot survive. The glob was
 written inside double quotes — `rm -f ".../pref/*bluefin*.js"` — so the shell
 matched a *literal* filename that never existed and left stale prefs behind.
-This is a style-only regression (#489): the common-case behaviour is unchanged,
-but the test locks the glob outside the quotes so the bug cannot silently
-return.
+
+Moving the glob outside the quotes changes behaviour (#489): `rm` now actually
+deletes the stale `*bluefin*.js` prefs the quoted form never matched. These
+tests lock the glob outside the quotes so the bug cannot silently return.
 """
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+_SHELLCHECK = shutil.which("shellcheck")
 HOOK = (
     ROOT
     / "system_files/shared/usr/share/ublue-os/privileged-setup.hooks.d"
@@ -51,9 +54,11 @@ class FlatpaksHookGlobTests(unittest.TestCase):
         # path with a space could not word-split. The fix only moved the
         # trailing glob out of the quotes; ARCH quoting is untouched.
         self.assertEqual(self.body.count("${ARCH}"), 3)
+
+    @unittest.skipUnless(_SHELLCHECK, "shellcheck is not installed")
     def test_shellcheck_passes(self):
         result = subprocess.run(
-            ["shellcheck", "--severity=warning", str(HOOK)],
+            [_SHELLCHECK, "--severity=warning", str(HOOK)],
             capture_output=True,
             text=True,
         )
