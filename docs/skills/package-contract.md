@@ -263,7 +263,9 @@ factory-pin bump that leaves the package set unchanged would otherwise read
 as "no growth" and pass silently, so it is reported as a stale baseline
 instead. Rewrite the baseline against the new ref with `--write` before the
 gate can meaningfully run. A stale-baseline verdict is reported before any
-partition-growth message, so it is never masked by a growth report.
+partition-growth message, so it is never masked by a growth report, and the
+failing summary line names the stale baseline rather than claiming the
+partitions grew.
 
 Bootstrap is a one-time manual command: on a fresh checkout where
 `baselines/audit-baseline.json` is missing, `just check-audit-parity`

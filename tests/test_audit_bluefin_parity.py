@@ -518,6 +518,57 @@ class StaleBaselineTests(unittest.TestCase):
         self.assertIn("stale baseline: ref", msgs[0])
         self.assertEqual(len(msgs), 2)
 
+    def _run_check(self, parts: dict, ref: str, factory_ref: str) -> tuple[int, str]:
+        """Run cmd_check against BASELINE with the network stubbed out."""
+        from argparse import Namespace
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_file = Path(tmp) / "audit-baseline.json"
+            baseline_file.write_text(json.dumps(self.BASELINE))
+            saved = audit.BASELINE
+            audit.BASELINE = baseline_file
+            err = io.StringIO()
+            try:
+                with patch.object(audit, "fetch_partition") as fetch, \
+                        contextlib.redirect_stderr(err), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    fetch.return_value = (ref, parts, None, None, factory_ref, None)
+                    code = audit.cmd_check(Namespace(ref=None))
+            finally:
+                audit.BASELINE = saved
+        return code, err.getvalue()
+
+    def test_check_trailer_on_a_stale_only_verdict_does_not_claim_growth(self):
+        # The operator text must match the verdict: nothing grew, the
+        # baseline was captured against a different ref, and the only
+        # remedy is to re-record it.
+        code, err = self._run_check(self.SAME, "new-bluefin", "old-factory")
+        self.assertEqual(code, 1)
+        self.assertNotIn("partitions grew", err)
+        self.assertIn("captured against different refs", err)
+        self.assertIn("--write", err)
+
+    def test_check_trailer_on_growth_alone_still_says_partitions_grew(self):
+        grew = dict(self.SAME)
+        grew["nowhere"] = ["brand-new"]
+        code, err = self._run_check(grew, "old-bluefin", "old-factory")
+        self.assertEqual(code, 1)
+        self.assertIn("partitions grew past", err)
+        self.assertNotIn("captured against different refs", err)
+
+    def test_check_trailer_reports_both_when_stale_and_grown(self):
+        grew = dict(self.SAME)
+        grew["nowhere"] = ["brand-new"]
+        code, err = self._run_check(grew, "new-bluefin", "new-factory")
+        self.assertEqual(code, 1)
+        self.assertIn("is stale and partitions grew past it", err)
+
+    def test_check_is_silent_and_passes_when_refs_match_and_nothing_grew(self):
+        code, err = self._run_check(self.SAME, "old-bluefin", "old-factory")
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+
 
 if __name__ == "__main__":
     unittest.main()
