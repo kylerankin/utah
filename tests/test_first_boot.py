@@ -21,8 +21,8 @@ import shutil
 import subprocess
 import tempfile
 import tomllib
+import unittest
 from pathlib import Path
-
 ROOT = Path(__file__).resolve().parents[1]
 HOOKS_DIR = ROOT / "system_files" / "shared" / "usr" / "share" / "ublue-os"
 TAILSCALE_HOOK = HOOKS_DIR / "privileged-setup.hooks.d" / "10-tailscale.sh"
@@ -118,24 +118,24 @@ class FirstBootEnv:
         The hook sources libsetup.sh from a hardcoded absolute path, so the copy
         rewrites that one line to the sandbox stub. When ``firefox_root`` is set
         the hardcoded firefox-config path is rewritten too, letting the "present"
-        branch be exercised without root.
+        branch be exercised without root. When unset, it points to a non-existent
+        sandbox path so the host's `/usr/share/ublue-os/firefox-config` is not read.
         """
         source = hook.read_text()
         source = source.replace(
             "source /usr/lib/ublue/setup-services/libsetup.sh",
             f'source {self.tmp}/libsetup.sh',
         )
-        if firefox_root is not None:
-            source = source.replace(
-                "/usr/share/ublue-os/firefox-config", str(firefox_root),
-            )
+        target_firefox = str(firefox_root) if firefox_root is not None else f"{self.tmp}/no-such-firefox-config"
+        source = source.replace(
+            "/usr/share/ublue-os/firefox-config", target_firefox,
+        )
         hook_copy = Path(self.tmp) / "hook.sh"
         hook_copy.write_text(source)
         hook_copy.chmod(0o755)
         return subprocess.run(
             [BASH, str(hook_copy)], env=self.env, capture_output=True, text=True,
         )
-
     def versioning_stamped(self, name, version):
         if not self.versioning.exists():
             return False
@@ -154,16 +154,16 @@ def _load_module(name):
 DESKTOP = _load_module("verify-desktop-contract")
 
 
-class TestTailscaleHook:
+class TestTailscaleHook(unittest.TestCase):
     def test_missing_binary_defers_without_failing(self):
         env = FirstBootEnv()
         env.install_libsetup()
         env.install(["getent"])  # no tailscale on PATH
         proc = env.run_hook()
-        assert proc.returncode == 0, proc.stderr
-        assert not env.versioning_stamped("tailscale", "1")
-        assert "deferring" in proc.stdout.lower()
-        assert not env.tailscale_log.exists()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(env.versioning_stamped("tailscale", "1"))
+        self.assertIn("deferring", proc.stdout.lower())
+        self.assertFalse(env.tailscale_log.exists())
 
     def test_present_binary_grants_operator(self):
         env = FirstBootEnv()
@@ -171,9 +171,9 @@ class TestTailscaleHook:
         env.install(["getent", "cut", "tailscale"])
         env.env["PKEXEC_UID"] = "1000"
         proc = env.run_hook()
-        assert proc.returncode == 0, proc.stderr
-        assert env.versioning_stamped("tailscale", "1")
-        assert "--operator=alice" in env.tailscale_log.read_text()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(env.versioning_stamped("tailscale", "1"))
+        self.assertIn("--operator=alice", env.tailscale_log.read_text())
 
     def test_missing_calling_uid_defers(self):
         env = FirstBootEnv()
@@ -181,24 +181,23 @@ class TestTailscaleHook:
         env.install(["getent", "cut", "tailscale"])
         env.env.pop("PKEXEC_UID", None)
         proc = env.run_hook()
-        assert proc.returncode == 0, proc.stderr
-        assert not env.versioning_stamped("tailscale", "1")
-        assert not env.tailscale_log.exists()
-        assert "no usable calling uid" in proc.stdout.lower()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(env.versioning_stamped("tailscale", "1"))
+        self.assertFalse(env.tailscale_log.exists())
+        self.assertIn("no usable calling uid", proc.stdout.lower())
 
     def test_version_stamp_is_idempotent(self):
         env = FirstBootEnv()
         env.install_libsetup()
         env.install(["getent", "cut", "tailscale"])
         env.env["PKEXEC_UID"] = "1000"
-        assert env.run_hook().returncode == 0
-        assert env.versioning_stamped("tailscale", "1")
+        self.assertEqual(env.run_hook().returncode, 0)
+        self.assertTrue(env.versioning_stamped("tailscale", "1"))
         env.run_hook()
         # Exactly one operator grant across both boots.
-        assert env.tailscale_log.read_text().count("--operator=alice") == 1
+        self.assertEqual(env.tailscale_log.read_text().count("--operator=alice"), 1)
 
-
-class TestFlatpaksHook:
+class TestFlatpaksHook(unittest.TestCase):
     def _flatpaks_env(self):
         env = FirstBootEnv()
         env.install_libsetup()
@@ -208,8 +207,8 @@ class TestFlatpaksHook:
     def test_missing_firefox_config_skips_cleanly(self):
         env = self._flatpaks_env()
         proc = env.run_hook(hook=FLATPAKS_HOOK)
-        assert proc.returncode == 0, proc.stderr
-        assert "firefox-config not present" in proc.stdout
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("firefox-config not present", proc.stdout)
 
     def test_present_firefox_config_copies(self):
         env = self._flatpaks_env()
@@ -219,26 +218,25 @@ class TestFlatpaksHook:
         # The guard must take the copy branch when firefox-config is present.
         # cp writes to /var/lib/flatpak (root-only), so we assert the branch was
         # taken rather than the exit code, which a no-root sandbox cannot satisfy.
-        assert "firefox-config not present" not in proc.stdout
-        assert "cp -rf /tmp/firefox-config-" in proc.stderr
+        self.assertNotIn("firefox-config not present", proc.stdout)
+        self.assertIn("cp -rf /tmp/firefox-config-", proc.stderr)
 
 
-class TestEnablementPolicy:
+class TestEnablementPolicy(unittest.TestCase):
     def test_contract_validates(self):
         data = tomllib.loads(CONTRACT.read_text())
-        assert DESKTOP.validate_contract(data) == []
+        self.assertEqual(DESKTOP.validate_contract(data), [])
 
     def test_contract_asserts_first_boot_services(self):
         data = tomllib.loads(CONTRACT.read_text())
         enabled = data["services"]["enabled"]
-        assert "bluefin-stats-refresh.timer" in enabled
-        assert "input-remapper.service" in enabled
+        self.assertIn("bluefin-stats-refresh.timer", enabled)
+        self.assertIn("input-remapper.service", enabled)
 
     def test_preset_enables_first_boot_services(self):
         preset = PRESET.read_text()
-        assert "enable bluefin-stats-refresh.timer" in preset
-        assert "enable input-remapper.service" in preset
-
+        self.assertIn("enable bluefin-stats-refresh.timer", preset)
+        self.assertIn("enable input-remapper.service", preset)
 
 if __name__ == "__main__":
     import unittest
