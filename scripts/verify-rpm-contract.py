@@ -27,6 +27,57 @@ from pathlib import Path
 # was one source, not the only one.
 NVIDIA_PACKAGES: tuple[str, ...] = ("nvidia-container-toolkit",)
 
+# Repository root, so the off-image policy check can read packages/*.repo
+# regardless of the caller's working directory.
+ROOT = Path(__file__).resolve().parents[1]
+
+# The repositories the composed image is permitted to expose in
+# /etc/yum.repos.d. The image must install only from these sources: any repo
+# present that is not here (for example one the base image shipped) is a policy
+# violation, and an intended repo missing is one too. The nvidia repo is on the
+# list even though it ships enabled=0 (packages/nvidia-container.repo:24): a
+# disabled repo is still a source the image could pull from, so it belongs in
+# the allowlist rather than being silently unchecked.
+REPOSITORY_ALLOWLIST: frozenset[str] = frozenset({
+    "fedora-44",
+    "fedora-44-updates",
+    "public-hummingbird-x86_64-rpms",
+    "nvidia-container-toolkit",
+    "utah-packages",
+})
+
+
+def repo_ids(directory: Path) -> set[str]:
+    """Repo-ids declared by the .repo files in `directory`.
+
+    A .repo file's `[section]` headers are its repository ids; everything else
+    (baseurl, gpgcheck, enabled, ...) says how to use the repo, not what it is.
+    """
+    ids: set[str] = set()
+    for path in sorted(directory.glob("*.repo")):
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("[") and line.endswith("]"):
+                ids.add(line[1:-1].strip())
+    return ids
+
+
+def verify_repository_policy(directory: Path) -> None:
+    """Assert `directory`'s repos are exactly the allowlist, off-image.
+
+    Raises ValueError otherwise. This is the off-image half of the composed
+    image's /etc/yum.repos.d policy: the .repo files the Containerfile copies
+    into the image are validated here in CI, so a base-image repo that leaks in
+    or a typo in an intended repo-id fails the build before the image ships.
+    """
+    present = repo_ids(directory)
+    unexpected = sorted(present - REPOSITORY_ALLOWLIST)
+    missing = sorted(REPOSITORY_ALLOWLIST - present)
+    if unexpected:
+        raise ValueError(f"unexpected repositories in {directory}: {unexpected}")
+    if missing:
+        raise ValueError(f"expected repositories missing from {directory}: {missing}")
+
 
 def section(path: Path, name: str) -> list[str]:
     data = tomllib.loads(path.read_text())
@@ -88,6 +139,18 @@ def main() -> int:
     )
     if args.check:
         assert len(set(expected)) == len(expected), "RPM contract contains duplicate package names"
+        # Off-image validation of the composed image's /etc/yum.repos.d: the
+        # .repo files the Containerfile copies in must match the allowlist.
+        # UTAH_REPOS_DIR lets the test point this at a synthetic tree; in CI it
+        # reads the shipped packages/.
+        repos_dir = Path(os.environ["UTAH_REPOS_DIR"]) if "UTAH_REPOS_DIR" in os.environ \
+            else ROOT / "packages"
+        if repos_dir.is_dir():
+            try:
+                verify_repository_policy(repos_dir)
+            except ValueError as error:
+                print(f"ERROR: {error}", file=sys.stderr)
+                return 1
         return 0
 
     missing = [pkg for pkg in expected if not is_installed(pkg)]

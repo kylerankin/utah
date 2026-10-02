@@ -572,6 +572,89 @@ class NvidiaImageAssertionTests(unittest.TestCase):
         self.assertNotIn("NVIDIA", out.split("Verifying", 1)[-1].split("\n", 1)[-1])
 
 
+class RepositoryPolicyTests(unittest.TestCase):
+    """verify_repository_policy is the off-image gate on /etc/yum.repos.d.
+
+    Issue #457: the composed image's repo allowlist was never applied, so a
+    base-image repo could leak in and the enabled=0 nvidia repo was unchecked.
+    These run the check against real and temporary trees of .repo files.
+    """
+
+    def setUp(self) -> None:
+        self.module = load_module()
+
+    def test_repo_ids_reads_section_headers_and_ignores_metadata(self) -> None:
+        """baseurl, gpgcheck and enabled say how to use a repo, not what it is."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "a.repo").write_text(
+                "[fedora-44]\nname=Fedora 44\nenabled=1\nbaseurl=...\n"
+                "[fedora-44-updates]\nname=Updates\nenabled=0\n"
+            )
+            (directory / "b.repo").write_text(
+                "[public-hummingbird-x86_64-rpms]\nurl=https://example\n"
+            )
+            ids = self.module.repo_ids(directory)
+        self.assertEqual(
+            ids,
+            {"fedora-44", "fedora-44-updates", "public-hummingbird-x86_64-rpms"},
+        )
+
+    def test_shipped_packages_match_the_allowlist(self) -> None:
+        """The repositories this repository actually ships must pass its own gate."""
+        self.module.verify_repository_policy(ROOT / "packages")
+
+    def test_the_nvidia_repo_is_in_the_allowlist_despite_being_disabled(self) -> None:
+        """enabled=0 does not make a repo out of scope: it is still a source."""
+        self.assertIn("nvidia-container-toolkit", self.module.REPOSITORY_ALLOWLIST)
+        self.assertTrue(
+            (ROOT / "packages" / "nvidia-container.repo").read_text().count("enabled=0") >= 1
+        )
+
+    def test_an_unexpected_repository_fails_the_check(self) -> None:
+        """A repo the base image shipped (or a stray file) must be refused."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "bad.repo").write_text("[fedora-44]\nbaseurl=...\n")
+            (directory / "leaked.repo").write_text("[base-image-updates]\nbaseurl=...\n")
+            with self.assertRaises(ValueError) as ctx:
+                self.module.verify_repository_policy(directory)
+        self.assertIn("unexpected repositories", str(ctx.exception))
+        self.assertIn("base-image-updates", str(ctx.exception))
+
+    def test_a_missing_intended_repository_fails_the_check(self) -> None:
+        """Forgetting to copy a repo into the image must surface, not pass."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "fedora.repo").write_text("[fedora-44]\nbaseurl=...\n")
+            with self.assertRaises(ValueError) as ctx:
+                self.module.verify_repository_policy(directory)
+        message = str(ctx.exception)
+        self.assertIn("missing", message)
+        for repo in ("public-hummingbird-x86_64-rpms", "nvidia-container-toolkit",
+                     "utah-packages"):
+            self.assertIn(repo, message)
+
+    def test_check_mode_rejects_an_unexpected_repository(self) -> None:
+        """The off-image --check path must apply the policy to the repo tree."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "bad.repo").write_text("[fedora-44]\nbaseurl=...\n")
+            (directory / "leaked.repo").write_text("[base-image-updates]\nbaseurl=...\n")
+            env = {
+                **os.environ,
+                "IMAGE_FLAVOR": "main",
+                "UTAH_REPOS_DIR": str(directory),
+            }
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "--check",
+                 str(ROOT / "packages" / "bluefin.toml"), str(ROOT / "packages" / "utah.toml")],
+                capture_output=True, text=True, env=env, cwd=str(ROOT),
+            )
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("unexpected repositories", result.stderr)
+
+
 class UsageTests(unittest.TestCase):
     """The manifest argument is required; the verifier must not run without one."""
 
