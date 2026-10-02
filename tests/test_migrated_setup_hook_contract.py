@@ -200,28 +200,29 @@ class MigratedSetupHookContractTests(unittest.TestCase):
         for kind, reason in (("ucsi", "dmi"), ("ucsi", "rpm-ostree"),
                              ("framework", "dmi"), ("framework", "brew"),
                              ("framework", "prefix")):
-            with self.subTest(hook=kind, reason=reason):
-                env = HookEnvironment(self, kind)
-                if reason == "dmi":
-                    env.vendor.unlink()
-                elif reason == "prefix":
-                    env.brew_prefix.rmdir()
-                else:
-                    (env.bin / reason).unlink()
-                deferred = env.run()
-                self.assertEqual(deferred.returncode, 0, deferred.stderr)
-                self.assertFalse(env.stamp.exists())
-                self.assertFalse(env.actions.exists())
-                if reason == "dmi":
-                    env.vendor.write_text("Framework\n")
-                elif reason == "prefix":
-                    env.brew_prefix.mkdir()
-                else:
-                    env.install(reason, TOOLS[reason])
-                recovered = env.run()
-                self.assertEqual(recovered.returncode, 0, recovered.stderr)
-                env.assert_stamped(self)
-                env.assert_effect(self)
+            for legacy in (False, True):
+                with self.subTest(hook=kind, reason=reason, legacy=legacy):
+                    env = HookEnvironment(self, kind, legacy=legacy)
+                    if reason == "dmi":
+                        env.vendor.unlink()
+                    elif reason == "prefix":
+                        env.brew_prefix.rmdir()
+                    else:
+                        (env.bin / reason).unlink()
+                    deferred = env.run()
+                    self.assertEqual(deferred.returncode, 0, deferred.stderr)
+                    self.assertFalse(env.stamp.exists())
+                    self.assertFalse(env.actions.exists())
+                    if reason == "dmi":
+                        env.vendor.write_text("Framework\n")
+                    elif reason == "prefix":
+                        env.brew_prefix.mkdir()
+                    else:
+                        env.install(reason, TOOLS[reason])
+                    recovered = env.run()
+                    self.assertEqual(recovered.returncode, 0, recovered.stderr)
+                    env.assert_stamped(self)
+                    env.assert_effect(self)
 
 
 if __name__ == "__main__":

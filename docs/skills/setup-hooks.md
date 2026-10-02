@@ -56,6 +56,10 @@ Two consequences to keep in mind when writing the body:
    (wrong vendor, karg already applied) commits before `exit 0` so the hook
    stops re-running every boot. A transient skip (DMI unreadable, dependency
    missing) exits *without* committing so it retries.
+3. **Evaluate transient guards before `version-script-check`.** Under the compat
+   shim the check *is* the legacy stamp, so a transient skip placed after it is
+   recorded as done and never retries. Deliberate skips stay after the check,
+   since they need the gate to have run before committing.
 
 ## Compat shim
 
