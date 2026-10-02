@@ -219,7 +219,9 @@ class TestFlatpaksHook(unittest.TestCase):
         # cp writes to /var/lib/flatpak (root-only), so we assert the branch was
         # taken rather than the exit code, which a no-root sandbox cannot satisfy.
         self.assertNotIn("firefox-config not present", proc.stdout)
-        self.assertIn("cp -rf /tmp/firefox-config-", proc.stderr)
+        # The hook copies from the (rewritten) firefox_root, which lives under
+        # TMPDIR — assert on the real path rather than a hardcoded /tmp prefix.
+        self.assertIn(str(firefox_root), proc.stderr)
 
 
 class TestEnablementPolicy(unittest.TestCase):
