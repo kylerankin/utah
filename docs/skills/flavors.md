@@ -1,7 +1,7 @@
 ---
 name: flavors
 version: "1.0"
-last_updated: "2026-09-18"
+last_updated: "2026-10-02"
 id: flavors
 one_line_purpose: Add, remove, or retire an image flavor safely.
 entry_point: docs/skills/flavors.md
@@ -91,6 +91,10 @@ group on that name; Utah's Justfile ignores it when naming images.
 
 Unknown names in `flavors` are a hard error at read time, so a typo in the
 config fails before any matrix is built from it.
+
+`tests/test_flavors.py` exercises custom suite values, active-flavor order,
+retired entries, and missing suite mappings; listing images alone does not
+prove the promotion gate has coverage for every active flavor.
 
 ## Verification
 

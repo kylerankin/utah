@@ -1,7 +1,7 @@
 ---
 name: ci-workflows
 version: "1.0"
-last_updated: "2026-09-29"
+last_updated: "2026-10-02"
 id: ci-workflows
 one_line_purpose: Navigate Utah's build, promote, and sync workflow topology.
 entry_point: docs/skills/ci-workflows.md
@@ -12,10 +12,9 @@ status: active
 dependencies: []
 tags: [ci, workflows, actions, promotion]
 description: >-
-  build.yml contract gate, kernel-cache job, main/kernel matrix split,
-  promote-testing-to-main and sync-main-to-testing, actions@v1 delegation,
-  weekly factory-pin bump. Use when changing .github/workflows/ or debugging a
-  red run.
+  Build contract and kernel-cache jobs, promotion and branch sync,
+  actions@v1 delegation, factory-pin bumps, exact-digest flavor VM suites.
+  Use when changing .github/workflows/ or debugging a red run.
 metadata:
   type: reference
 ---
@@ -230,10 +229,9 @@ after a partial copy.
 
 A separate least-privilege job proposes the main desktop's screenshots in
 `automation/iso-verification`, a documentation PR. It also depends on
-`production-iso`, so a failed production-ISO composition blocks this
-screenshot-refresh PR too, not just testing-tag promotion — a LUKS-only
-concern in `docs/verification` still has to wait on the whole matrix
-composing cleanly. It updates only the README evidence block and
+`production-iso` and `gate`, so either a failed ISO composition or a failed VM
+suite blocks screenshot refresh as well as testing-tag promotion. It updates
+only the README evidence block and
 `docs/verification/`, preserving the current README's other content. The
 repository must allow Actions to create pull requests; a denied write fails
 this job visibly, without deleting test artifacts. It does not auto-merge
@@ -256,10 +254,16 @@ rerun), not just one workflow.
 
 The cadence is RFC'd in #336. What runs today:
 
-- `testing` is the integration branch. `build.yml` runs on every pull request
-  and on every push to `testing`; `main` receives the promotion merge from
-  `promote-testing-to-main.yml` and nothing else. `sync-main-to-testing.yml`
-  carries the promotion back down nightly.
+- Open pull requests against `main`, never `testing`. `sync-main-to-testing.yml`
+  resets `testing` to `main` on every push to `main` and again nightly on its
+  own `20 22 * * *` schedule, so a commit merged straight into `testing` is
+  orphaned: #404 was lost this way and had to be re-landed. `build.yml` runs on
+  every pull request and declares `push: branches: [testing]`, but that trigger
+  is not how a `main` commit reaches the image tags: the sync pushes `testing`
+  with the workflow's own `GITHUB_TOKEN`, and a `GITHUB_TOKEN` push starts no
+  workflow. `sync-main-to-testing.yml`'s `build` job therefore dispatches the
+  build explicitly (`gh workflow run build.yml --ref testing`) once the sync
+  job returns, which is the path that actually produces the images.
 - `:testing` advances per green build, not on a clock: the tags move in
   `post-testing-e2e.yml`, after the LUKS ISO matrix and the production-ISO
   composition both pass. `promote-testing-to-main.yml` is the daily 04:00 UTC
@@ -311,6 +315,7 @@ a `FROM image@sha256:` -- the built-in dockerfile manager cannot see it, and
 the org custom manager only covers `image-versions.yml`. A future
 `image-versions.yml` in this repository would make that a duplicate; do not
 add one without retiring this workflow.
+
 ## Flavor gate (exact-digest VM suites)
 
 `post-testing-e2e.yml` also runs the `gate` job, which boots each flavor's
@@ -320,9 +325,26 @@ flavor's own behave suites before `:testing` advances. The digests come from
 from the same artifacts the LUKS matrix reads), so every flavor is pinned to
 the precise digest this build produced.
 
+The caller sets `compose_image: false`. At the pinned workflow SHA, every
+reusable invocation otherwise publishes `testsuite-e2e:run-${GITHUB_RUN_ID}`;
+all four flavors share that tag and the suite jobs boot its last writer,
+not necessarily their input digest. Disabling composition boots the raw
+candidate and keeps the reusable's runner containers and runtime tool setup.
+It does not add test packages to any published Utah image.
+
+The runtime setup must still work on Utah. In `e2e.yml` at `ee82d53`, the
+common step installs missing zsh/fish through `rpm-ostree install --apply-live
+--allow-inactive` or `dnf install -y`, and installs the other CLI tools through
+Homebrew when present. Utah does not set `LockLayering=true`, but that alone
+does not prove runtime RPM installation works on its bootc base; fish is
+deliberately omitted (#419), and the factory repo is disabled after composition.
+Keep these assertions and confirm tool availability in the actual gate run.
+A failed runtime setup requires a compatible testsuite tool-install path,
+not deleting common scenarios or reverting to the shared composition tag.
+
 Suites per flavor come from the `suites` map in `config/flavors.json` (via
-`python3 scripts/flavors.py suites`), all starting with `smoke,common` so a
-broken boot is caught first:
+`python3 scripts/flavors.py suites`). The reusable runs their shards in parallel,
+so the order below does not sequence smoke ahead of the other suites:
 
 | Flavor | Image | Suites |
 |--------|-------|--------|
@@ -331,14 +353,17 @@ broken boot is caught first:
 | gaming | `utah-gaming` | `smoke,common,bazzite` |
 | nvidia-gaming | `utah-nvidia-gaming` | `smoke,common,nvidia,bazzite` |
 
-The `bazzite` suite validates the gaming userspace. The `nvidia` suite is
-currently hardware-blocked at the pinned test ref: every nvidia scenario is
-stubbed-only (tagged `@hardware_blocked`) and excluded from the run, so the
-nvidia flavors gain only `smoke,common` coverage until real nvidia scenarios
-land. The job calls the pinned `projectbluefin/testsuite` reusable
-e2e workflow (`ee82d53... # v1`) and checks the tests out of that repo pinned
-to a specific SHA (not `main`), so an unreleased test change cannot start or
-stop `:testing` promotion with no local commit to revert. `gate` is a `fail-fast: false` matrix, so one
+The `bazzite` suite runs Bazzite GNOME extension and shell checks, including
+Logo Menu expectations; it does not assert Utah's gaming kernel or modules.
+Compatibility with Utah's desktop must be established by the gate run, not
+inferred from that suite name. The `nvidia` suite is hardware-blocked at the
+pinned test ref: every scenario is tagged `@hardware_blocked` and excluded,
+so its success is not NVIDIA kernel/module, CUDA, Vulkan or GPU evidence.
+Those hardware assertions require runnable upstream scenarios and an appropriate
+GPU runner before #13's full flavor-coverage criterion can be claimed.
+The reusable workflow (`ee82d53...`) and tests (`4c053fd...`) are SHA-pinned,
+so an unreleased test change cannot start or stop promotion without a local
+commit. `gate` is a `fail-fast: false` matrix, so one
 stuck flavor fails only itself; `promote-to-testing` needs it, and GitHub skips
 a job when any dependency fails, so a failed suite leaves `:testing` untouched
 and the promotion job never runs. `luks` (installer + provenance), `production-iso`

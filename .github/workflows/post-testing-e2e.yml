@@ -301,17 +301,14 @@ jobs:
             output/utah-live.iso.sha256
 
 
-  # Boot and test the exact digest for each flavor with that flavor's own suites
-  # before any :testing tag advances. Main runs smoke,common; the nvidia flavors
-  # add nvidia (currently hardware-blocked at the pinned test ref — every scenario
-  # is stubbed-only and excluded from the run, so this is smoke,common in practice)
-  # and the gaming flavors add bazzite for the gaming userspace. All flavors start
-  # with smoke,common so a broken boot is caught before the flavor-specific
-  # suites run. Fail-closed: a single failed suite fails the matrix and the
-  # promotion job (which needs this one) is skipped, leaving :testing untouched.
+  # Test each exact digest without replacing it with a composed-image tag.
+  # The pinned reusable composes every call to run-${GITHUB_RUN_ID}; all flavor
+  # calls share that ID, so default composition races and can boot another flavor.
+  # Keep all configured suites. NVIDIA scenarios at this test ref are excluded
+  # as hardware-blocked; suite shards run in parallel, not in listed order.
+  # Any failed suite blocks promotion, leaving :testing untouched.
   gate:
     needs: resolve
-    if: needs.resolve.result == 'success'
     permissions:
       contents: read
       actions: read
@@ -320,12 +317,16 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.resolve.outputs.suites) }}
-    uses: projectbluefin/testsuite/.github/workflows/e2e.yml@ee82d53a4f86617d807df831a60ad1deaa0d5366 # v1
+    uses: projectbluefin/testsuite/.github/workflows/e2e.yml@ee82d53a4f86617d807df831a60ad1deaa0d5366
     with:
       image: ${{ fromJSON(needs.resolve.outputs.digests)[matrix.image] }}
+      # Preserve the candidate digest; the reusable's runtime tool setup remains
+      # enabled. Do not hide missing zsh/fish or GPU checks by dropping suites.
+      compose_image: false
       suites: ${{ matrix.suites }}
       test_repository: projectbluefin/testsuite
       test_ref: 4c053fd2ea7837d1d92788adb2812122fa666e65
+
   promote-to-testing:
     needs: [resolve, luks, production-iso, gate]
     runs-on: ubuntu-26.04
@@ -353,7 +354,7 @@ jobs:
           done < <(jq -r '.include[].ref' <<< "$MATRIX")
 
   documentation:
-    needs: [resolve, luks, production-iso]
+    needs: [resolve, luks, production-iso, gate]
     runs-on: ubuntu-26.04
     permissions:
       contents: write
