@@ -272,6 +272,16 @@ gate can meaningfully run. A stale-baseline verdict is reported before any
 partition-growth message, so it is never masked by a growth report, and the
 failing summary line names the stale baseline rather than claiming the
 partitions grew.
+The baseline also records the Hummingbird repo `baseurl` it was captured
+against. A Hummingbird repo URL change moves packages between the
+Hummingbird and factory repodata the audit reads, shifting
+`hummingbird-available` without any name actually being added or
+removed, so the partition diff alone would read "no growth". The check
+compares the current `baseurl` to the recorded one first and reports a
+mismatch as a stale baseline before the partition diff, so the verdict
+is never masked by a growth report; a baseline written before the key
+existed is not invented into a mismatch. Rewrite the baseline against
+the new repo with `just audit-bluefin-parity --write`.
 
 Bootstrap is a one-time manual command: on a fresh checkout where
 `baselines/audit-baseline.json` is missing, `just check-audit-parity`
