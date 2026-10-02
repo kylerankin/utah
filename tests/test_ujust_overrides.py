@@ -112,7 +112,7 @@ class UjustOverridesTests(unittest.TestCase):
         result = self.run_recipe("changelogs")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "# Release notes\n")
-        self.assertIn("repo --default projectbluefin/bluefin utah testing", self.calls())
+        self.assertIn("repo --default projectbluefin/utah utah testing", self.calls())
         self.assertIn("https://api.github.com/repos/projectbluefin/utah/releases/latest", self.calls())
 
     def test_changelogs_with_glow(self):

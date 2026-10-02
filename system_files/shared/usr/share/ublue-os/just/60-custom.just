@@ -42,8 +42,12 @@ changelogs:
     IMAGE_INFO_FILE="${IMAGE_INFO_FILE:-/usr/share/ublue-os/image-info.json}"
     TAG="$(jq -r '.["image-tag"]' < "$IMAGE_INFO_FILE")"
     IMAGE_NAME="$(jq -r '.["image-name"] // empty' < "$IMAGE_INFO_FILE")"
+    # Resolve the owning repo through ublue-image-repo. utah is not in the
+    # shared grammar, so it falls through to --default; that default must be
+    # Utah's own repo, not bluefin's (otherwise ujust changelogs opens
+    # projectbluefin/bluefin releases). See projectbluefin/utah#466.
     REPO="$("${UBLUE_IMAGE_REPO_BIN:-/usr/libexec/ublue-image-repo}" \
-        --default 'projectbluefin/bluefin' "$IMAGE_NAME" "$TAG")"
+        --default 'projectbluefin/utah' "$IMAGE_NAME" "$TAG")"
     CONTENT=''
     if [[ "$TAG" =~ gts$|stable$|^lts ]]; then
         DATE="$(grep -oP 'OSTREE_VERSION=.*\d{2}\.\K\d{8}[.0-9]*' /etc/os-release || true)"
