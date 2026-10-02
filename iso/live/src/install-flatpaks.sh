@@ -108,7 +108,7 @@ fi
 retry_flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 # Ghostty resolves from the TunaOS remote. The image vendors that remote's
 # descriptor at /etc/flatpak/remotes.d/tuna-os.flatpakrepo; register it from
-# the vendored file so the bake never fetches a trust root over the network.
+# the vendored file so the bake never fetches its remote configuration.
 # --if-not-exists keeps this a no-op if flatpak already imported remotes.d.
 retry_flatpak remote-add --system --if-not-exists tuna-os \
     /etc/flatpak/remotes.d/tuna-os.flatpakrepo
@@ -130,10 +130,9 @@ ostree init --repo="${local_repo}" --mode=archive-z2
 flatpak build-import-bundle "${local_repo}" /tmp/bootc-installer.flatpak
 rm -f /tmp/bootc-installer.flatpak
 flatpak remote-add --system --no-gpg-verify installer-local "file://${local_repo}"
-# --or-update for the same reason the Flathub installs below carry it: a retry
-# must be a no-op for a ref that already completed. Without it, an attempt
-# that installed the app but still exited nonzero would make attempts 2 and 3
-# fail with "already installed", turning a flaky success into a hard failure.
+# --or-update makes a retry harmless for an installer ref already deployed.
+# Without it, an install that deployed the app but exited nonzero would make
+# every later attempt fail with "already installed".
 retry_flatpak install --system --noninteractive --or-update installer-local \
     "${INSTALLER_APP_ID}"
 flatpak remote-delete --system --force installer-local || true

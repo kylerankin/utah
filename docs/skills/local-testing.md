@@ -176,7 +176,8 @@ Production live boot entries configure:
 
 ### Secure Boot strategy
 
-- **Live ISO bootloader**: The live image installs `systemd-boot-unsigned`.
+- **Live ISO bootloader**: The image carries `systemd-boot-unsigned`, which the
+  live ISO boots from.
   On hardware with Microsoft UEFI Secure Boot enabled, firmware will reject the
   unsigned EFI loader unless Secure Boot is temporarily disabled in UEFI setup.
   Production releases will incorporate Fedora's signed shim (`shimx64.efi`) and
@@ -230,6 +231,18 @@ installs, including copies users kept deliberately. That is intended flatpak
 semantics, but it only takes effect now that the declared entries resolve, so
 treat Brewfile removals as user-visible uninstalls rather than build-only
 changes.
+
+Flatpak 1.19.0's [preinstall manual](https://github.com/flatpak/flatpak/blob/ec707cb43a0b332e4eea581d49bf9bb11f0dbd73/doc/flatpak-preinstall.xml)
+and [sync implementation](https://github.com/flatpak/flatpak/blob/ec707cb43a0b332e4eea581d49bf9bb11f0dbd73/common/flatpak-transaction.c)
+are the pinned references for this policy. A user who removes an already
+marked default is not forced to reinstall it while the declaration remains;
+`--reinstall` explicitly overrides that opt-out. A zero preinstall exit alone
+is not bake evidence: missing remote metadata can be warned about and skipped.
+The bake retries preinstall and the declared-set check together, and fails
+after five incomplete attempts. Validate the real path with a rootless live
+image build and then `just luks-test` on its debug ISO; PR image-only CI does
+not exercise the ISO bake. The vendored TunaOS descriptor pins an OCI remote
+URL, not a GPG trust anchor; content trust still depends on TLS to that remote.
 
 ## Tacklebox ISOs (unpublished variants)
 
@@ -297,6 +310,15 @@ read falls back to `sudo` when `bootc status --json` returns nothing to the
 unprivileged test user.
 Read the recipe and script prerequisites before running it: it creates test
 accounts and requires local QEMU/KVM access, not a production installation.
+
+The installed-boot gate also checks `/var/lib/logrotate` before starting
+`logrotate.service`, then requires a nonempty `logrotate.status` state file.
+Do not create the directory in the test: `scripts/clean-stage.sh` removes
+`/var/lib` during composition, so writable service state must be recreated at
+boot by a rule shipped under `system_files/shared/usr/lib/tmpfiles.d/`.
+`utah-logrotate.conf` supplies the root-owned directory for logrotate (#386).
+A build-time `mkdir` or a clean bootc lint result alone does not prove that
+service state exists on a fresh installed system.
 
 Passing runs refresh `docs/verification/README.md`, its screenshots, and the
 delimited verification block in the root README. These are historical local
