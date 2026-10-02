@@ -56,8 +56,8 @@ exit "${TAILSCALE_EXIT:-0}"
 
 
 class FirstBootEnv:
-    def __init__(self, case, legacy=False):
-        temporary = tempfile.TemporaryDirectory(prefix="first-boot-")
+    def __init__(self, case, legacy=False, directory=None):
+        temporary = tempfile.TemporaryDirectory(prefix="first-boot-", dir=directory)
         case.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.bin = self.root / "bin"
@@ -199,7 +199,11 @@ class TestFlatpaksHook(unittest.TestCase):
         self.assertEqual(list(env.preferences.iterdir()), [])
 
     def test_present_firefox_config_copies(self):
-        env = FirstBootEnv(self)
+        # Exercise a relocated temporary root, including spaces, rather than
+        # depending on the host's /tmp layout or matching a trace prefix.
+        temporary = tempfile.TemporaryDirectory(prefix="firefox fixture ")
+        self.addCleanup(temporary.cleanup)
+        env = FirstBootEnv(self, directory=temporary.name)
         env.firefox_root.mkdir(parents=True)
         preferences = "pref('x', 1);\n"
         (env.firefox_root / "bluefin.js").write_text(preferences)
