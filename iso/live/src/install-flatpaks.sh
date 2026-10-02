@@ -7,9 +7,11 @@
 # those declarations ship in the Utah image itself: configure-services.sh
 # generates brewfile.preinstall from the Bluefin parity Brewfile, and
 # bazaar.preinstall and ghostty.preinstall are in system_files. This script only
-# runs `flatpak preinstall`, so the ISO bakes exactly the set an installed
-# system's flatpak-preinstall.service applies, and any ISO builder that runs
-# `flatpak preinstall` bakes the same set. See projectbluefin/utah#257.
+# runs `flatpak preinstall`, so the ISO bakes exactly the declared set, and any
+# other builder that runs `flatpak preinstall` bakes the same set. The same
+# applies to flatpak-preinstall.service when that service runs; on an installed
+# system it is currently disabled, because it is enabled at build time with no
+# preset entry behind it. See projectbluefin/utah#257.
 set -euo pipefail
 
 # Flathub pulls are the largest network operation in the whole ISO build --
@@ -148,8 +150,9 @@ for branch in /var/lib/flatpak/app/${INSTALLER_APP_ID}/x86_64/*; do
 done
 flatpak override --system --filesystem=/etc:ro "${INSTALLER_APP_ID}"
 
-# Install everything the image declares in preinstall.d: the bake and an
-# installed system's flatpak-preinstall.service read the same entries.
+# Install everything the image declares in preinstall.d: the bake and
+# flatpak-preinstall.service read the same entries (that service is disabled on
+# installed systems today -- see #257 -- so the bake is what populates them).
 # --no-related keeps locale extensions out of the squashfs, as the former
 # hand-maintained install did. flatpak marks a ref preinstalled only once it
 # deploys, so a retry after a timed-out pull resumes with what is still missing.
