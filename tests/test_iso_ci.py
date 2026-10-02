@@ -458,6 +458,42 @@ class FlatpakRetryTests(unittest.TestCase):
                 self.assertTrue(line.startswith("retry_flatpak install"),
                                 f"unretried network install: {line}")
 
+    def test_flatpak_preinstall_runs_inside_the_retry_loop(self):
+        # `flatpak preinstall` is the primary network path but does not start
+        # with `flatpak install` / `retry_flatpak install`, so the guard above
+        # would silently miss an un-retried preinstall. Assert it stays inside
+        # the attempt loop.
+        script = self.SCRIPT.read_text()
+        lines = script.splitlines()
+        loop_start = next((i for i, l in enumerate(lines)
+                           if l.startswith("for (( attempt")), None)
+        preinstall = [i for i, l in enumerate(lines)
+                      if l.strip().startswith("flatpak preinstall")]
+        self.assertIsNotNone(loop_start, "the attempt loop is gone")
+        self.assertTrue(preinstall, "the preinstall path was removed")
+        loop_end = self._match_done(lines, loop_start)
+        for i in preinstall:
+            with self.subTest(line=lines[i]):
+                self.assertGreater(i, loop_start,
+                                   f"{lines[i]} is outside the retry loop")
+                self.assertLess(i, loop_end,
+                                 f"{lines[i]} is outside the retry loop")
+
+    @staticmethod
+    def _match_done(lines, for_idx):
+        # Walk from a `for` line counting nested for/done to find its matching
+        # `done`, so a nested loop elsewhere does not end the range early.
+        depth = 0
+        for j in range(for_idx, len(lines)):
+            stripped = lines[j].strip()
+            if stripped.startswith("for "):
+                depth += 1
+            elif stripped == "done":
+                depth -= 1
+                if depth == 0:
+                    return j
+        return None
+
     def test_every_retried_install_is_idempotent(self):
         # The retry is only safe if re-running it is a no-op for a ref that
         # already completed. Without --or-update, an attempt that installed the
