@@ -369,12 +369,24 @@ packages = [
 #
 # pipewire-libs-extra is supplied by the pinned September 10 factory candidate
 # and returns to the install contract (#35).
+#
+# nvtop
+#   Homebrew's formula is deprecated because of a suspected upstream source
+#   compromise, not ordinary unmaintainership: the initial release tarball was
+#   built with a source file whose checksum differed from the current one, so
+#   Homebrew flags upstream's repository as possibly tampered with and disables
+#   the formula on 2027-09-17 (`brew info nvtop`, issue #451). Record the reason
+#   here, not just "deprecated": the factory recipe that lands this in
+#   [parity] must pin a source verified against upstream's *retagged* release
+#   rather than the deprecated bottle, until upstream confirms the repository is
+#   clean. Tracked by utah-packages#311.
 packages = [
     "grub2-efi-x64-cdboot",
     "anaconda-live",
     "evolution-ews-core",
     "firefox",
     "fish",
+    "nvtop",
     "slitherer",
 ]
 

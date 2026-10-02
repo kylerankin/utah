@@ -73,6 +73,22 @@ hardware establishes that its radio works.
 a dumping ground for packages that are merely inconvenient (header comment,
 `packages/utah.toml`).
 
+### Surface security-relevant deprecation reasons
+
+When an entry is absent because an external source deprecated it, record the
+*reason*, not just "deprecated". A deprecation that is actually a suspected
+source compromise carries different factory requirements than one that is
+plain unmaintainership (header comment, `packages/utah.toml`).
+
+Example: `nvtop`'s Homebrew formula is deprecated because the initial release
+tarball's checksum differed from the current one and Homebrew flags upstream's
+repository as possibly compromised (disabled 2027-09-17, issue #451). The
+comment states that reason and the factory requirement that follows: the recipe
+that later moves `nvtop` into `[parity]` must pin a source verified against
+upstream's **retagged** release, not the deprecated bottle. Encoding the reason
+here is what lets the security review (issue #455) see it at build time rather
+than discovering the compromise after a bottle is already pinned.
+
 ## multimedia_overrides are not missing packages
 
 Bluefin's `[multimedia_overrides]` (twelve names: mesa-libGL,
@@ -197,7 +213,7 @@ Update it whenever synchronizing `packages/bluefin.toml` with upstream.
 
 Current counts, per the README "Package parity" section: 61 Bluefin contract
 packages installed, 88 Utah additions (GNOME 51, base-image parity, device
-firmware, desktop services), 6 genuinely unavailable. `scripts/check-doc-counts.py` (part of
+firmware, desktop services), 7 genuinely unavailable. `scripts/check-doc-counts.py` (part of
 `just check`) recomputes these from the manifests and fails if either
 document drifts from `site/data/packages.json`.
 
