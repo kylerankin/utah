@@ -808,14 +808,15 @@ fi
 # real time to complete; the loop below still tolerates a little more.
 #
 # The expected set is read from the installed system's own preinstall.d -- the
-# source of truth install-flatpaks.sh bakes the ISO from and
-# flatpak-preinstall.service applies on first boot -- so this checks the actual
-# default set rather than one app (Ghostty) picked only because the
-# terminal-automation phase above happens to need it. It was derived from the
-# Brewfile before, which silently excluded Utah's own additions: Ghostty is
-# kept out of the Brewfile-derived brewfile.preinstall on purpose, as Utah's
-# addition rather than the Bluefin parity contract, so an ISO with no Ghostty
-# -- the motivating symptom -- passed this check.
+# source of truth install-flatpaks.sh bakes the ISO from, and that
+# flatpak-preinstall.service would apply if it ran (it is disabled on installed
+# systems, see #257, so what is on disk came from the bake via fisherman) -- so
+# this checks the actual default set rather than one app (Ghostty) picked only
+# because the terminal-automation phase above happens to need it. It was
+# derived from the Brewfile before, which silently excluded Utah's own
+# additions: Ghostty is kept out of the Brewfile-derived brewfile.preinstall on
+# purpose, as Utah's addition rather than the Bluefin parity contract, so an
+# ISO with no Ghostty -- the motivating symptom -- passed this check.
 # UTAH_E2E_FLATPAKS overrides the expected set directly; empty to skip.
 if [[ -n "${UTAH_E2E_FLATPAKS-x}" ]]; then
     if [[ -n "${UTAH_E2E_FLATPAKS-}" ]]; then

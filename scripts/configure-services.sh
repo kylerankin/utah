@@ -96,11 +96,13 @@ curl --fail --retry 3 --silent --show-error \
     https://dl.flathub.org/repo/flathub.flatpakrepo
 
 # Declare the Bluefin parity Brewfile's Flatpaks in preinstall.d, in the image,
-# so flatpak-preinstall.service on an installed system and every ISO builder
-# that runs `flatpak preinstall` see the same set the live ISO bakes. The
-# entries are generated from the Brewfile rather than re-listed, so the two can
-# never drift. No CollectionID: Utah's Flathub remote has none, and an entry
-# that names one no remote carries is silently skipped.
+# so every ISO builder that runs `flatpak preinstall` -- and
+# flatpak-preinstall.service whenever it runs -- sees the same set the live ISO
+# bakes. (That service is enabled above but has no preset entry, so bootc's
+# first-boot preset application disables it on installed systems; see #257.)
+# The entries are generated from the Brewfile rather than re-listed, so the two
+# can never drift. No CollectionID: Utah's Flathub remote has none, and an
+# entry that names one no remote carries is silently skipped.
 brewfile=/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile
 brew_preinstall=/usr/share/flatpak/preinstall.d/brewfile.preinstall
 install -d -m0755 /usr/share/flatpak/preinstall.d

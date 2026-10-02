@@ -211,7 +211,14 @@ The default Flatpaks are declared in the image's
 and `ghostty.preinstall` ship from `system_files`, and
 `scripts/configure-services.sh` generates `brewfile.preinstall` from the
 Bluefin Brewfile. `install-flatpaks.sh` only runs `flatpak preinstall`, so the
-ISO and an installed system's `flatpak-preinstall.service` apply the same set.
+ISO bakes exactly the declared set, and so does anything else that runs
+`flatpak preinstall` against the image -- including
+`flatpak-preinstall.service` when that service runs. It does not run on a
+normal installed system today: `configure-services.sh` enables it at build
+time, but no preset lists it (see `WITHOUT_PRESET` in
+`tests/test_package_resolution.py`), so bootc's first-boot preset application
+disables it again, which is what #257 observed. Fixing that is a behavior
+change and is not part of this ISO work.
 preinstall.d has no key that names a remote: an entry resolves from every
 configured remote, or only those whose collection ID equals its
 `CollectionID`, and an entry nothing resolves is skipped with exit 0 (the bake
@@ -225,11 +232,11 @@ The TunaOS remote descriptor is vendored at
 survive into installed systems. Upstream then treats preinstall.d as the
 authoritative set: a marked ref that a later image no longer declares is
 uninstalled on the next `flatpak-preinstall.service` run. Dropping an app from
-the Brewfile (or from a `*.preinstall` file) therefore removes it from existing
-installs, including copies users kept deliberately. That is intended flatpak
-semantics, but it only takes effect now that the declared entries resolve, so
-treat Brewfile removals as user-visible uninstalls rather than build-only
-changes.
+the Brewfile (or from a `*.preinstall` file) therefore removes it from any
+system where that service runs, including copies users kept deliberately. That
+is intended flatpak semantics, and it is latent rather than live while the
+service stays disabled on installed systems (above) -- but enabling it would
+make Brewfile removals user-visible uninstalls, not build-only changes.
 
 ## Tacklebox ISOs (unpublished variants)
 
