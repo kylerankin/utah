@@ -21,7 +21,6 @@ published — no image, no ISO artifact, no installer.
 just check                            # full static validation (run before every commit)
 just check-parity                     # bluefin.toml must equal upstream base.toml (network)
 just check-repos                      # contract packages resolvable in enabled repos (network)
-just check-unavailable                # [unavailable] entries still unsatisfiable (network)
 just build-ghcr utah testing main     # local image build -> localhost/utah:testing
 just check-desktop-contract           # in-image verifiers against a built image
 just generate-bootable-image testing  # bootc install to-disk -> output/bootable.raw
@@ -46,18 +45,19 @@ checks (`scripts/check-skill-frontmatter.sh`, `scripts/check-skill-index.sh`,
 - **Utah's own package changes live in `packages/utah.toml`** (`[gnome]`,
   `[build]`, `[unavailable]`). Every `[unavailable]` entry MUST carry a
   tracking issue. A missing contract package is a build failure, never a
-  silent skip. `[unavailable]` is asserted on every build too:
-  `just check-unavailable` fails the build when an entry becomes installable,
-  so an upstream release cannot silently close a gap the manifest never
-  intended. Move a now-installable entry into its real section (or remove it)
-  with a matching manifest edit.
+  silent skip.
 - **`config/flavors.json` is the single source of the flavor set.** No
   workflow or Justfile recipe may name `utah-nvidia` or `utah-gaming`
   literally — `just check` fails on it. Retire a flavor by moving it under
   `retired` with the reason.
-- **Containerfile ARG digests are Renovate-managed pins** (`BASE_IMAGE`,
-  `PACKAGE_IMAGE_SHA`, `COMMON_IMAGE_SHA`, `BREW_IMAGE_SHA`). Do not bump them
-  by hand unless the task is exactly that. `Containerfile` and
+- **Containerfile ARG digests are pinned** (`BASE_IMAGE`, `PACKAGE_IMAGE_SHA`,
+  `COMMON_IMAGE_SHA`, `BREW_IMAGE_SHA`). Do not bump them by hand unless the
+  task is exactly that. `BASE_IMAGE`, `COMMON_IMAGE_SHA` and `BREW_IMAGE_SHA`
+  are Renovate-managed. `PACKAGE_IMAGE_SHA` is not — Renovate cannot see it
+  through the `ARG` indirection — so it has its own rev path:
+  `scripts/bump-factory-pin.py` rewrites it from the registry, and
+  `.github/workflows/bump-factory-pin.yml` proposes that rev as a pull request
+  weekly (#336). `Containerfile` and
   `Containerfile.kernel` must share the same `BASE_IMAGE` line; `just check`
   asserts it. A `PACKAGE_IMAGE_SHA` bump must also move the `# factory-pin:`
   stamp in `packages/utah-packages.repo` — the stamp is the transaction's
@@ -71,7 +71,7 @@ checks (`scripts/check-skill-frontmatter.sh`, `scripts/check-skill-index.sh`,
   `packages/hummingbird.repo` (`scripts/kernel-cache-tag.sh`). Any edit to
   those files — comments included — forces a ~45-minute cache rebuild. That is
   deliberate; just know it before you touch them.
-- **Utah scripts install as `/usr/local/libexec/utah-*`** via one staged COPY
+- **Utah scripts install as `/usr/libexec/utah-*`** via one staged COPY
   and a rename loop in the Containerfile. A new script means updating the COPY
   list, the rename loop, and `just check`.
 - **`ENABLE_SSHD=1` is local-diagnostic only.** Never in a published image.

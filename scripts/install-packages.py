@@ -149,6 +149,33 @@ def dnf_path() -> str:
     return dnf
 
 
+# DNF exits nonzero when --assumeno declines a valid transaction, so the exit
+# status alone cannot tell "declined a valid transaction" from "no such
+# package". A missing package or dependency must never be accepted as the
+# declined case: the error patterns fail the verdict even beside a summary,
+# and a verdict without a summary or an "already installed" line is not one.
+RESOLVE_ERRORS = r"No match for argument|nothing provides|conflicting requests|cannot install both|Error:|Failed to"
+RESOLVE_SUMMARY = r"(?m)^Transaction Summary:?\s*$|^Nothing to do\.?\s*$"
+
+
+def dnf_assumeno(dnf: str, repos: tuple[str, ...], packages: list[str]) -> subprocess.CompletedProcess:
+    """Resolve an install transaction without installing anything."""
+    return subprocess.run(
+        [dnf, "--assumeno", "--disablerepo=*",
+         *(f"--enablerepo={r}" for r in repos),
+         "-x", "PackageKit*", "install", *packages],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        env={**os.environ, "LC_ALL": "C"}, check=False,
+    )
+
+
+def transaction_resolves(result: subprocess.CompletedProcess) -> bool:
+    """Whether a declined dnf transaction resolved every argument."""
+    return (result.returncode in (0, 1)
+            and not re.search(RESOLVE_ERRORS, result.stdout, re.IGNORECASE)
+            and re.search(RESOLVE_SUMMARY, result.stdout) is not None)
+
+
 def run(*args: str) -> int:
     print("+", " ".join(args), flush=True)
     return subprocess.run(args, check=False).returncode
@@ -164,97 +191,6 @@ def installed(packages: list[str]) -> list[str]:
         check=False,
     )
     return sorted(set(out.stdout.split()))
-
-
-# A declined --assumeno run exits nonzero for a *valid* transaction, so these
-# markers are what separate "the package exists and installs" from "the
-# package is absent or its dependencies cannot be met": the absence is what
-# an [unavailable] entry must keep showing.
-# "Error:"/"Failed to" are environment failures (unreachable repo, broken
-# mount, failed download): they mean the check could not run, not that the
-# package is unavailable. "No match"/"nothing provides" are the genuine signal
-# an [unavailable] entry must keep showing.
-_UNAVAILABLE_ERROR_RE = re.compile(
-    r"No match for argument|nothing provides|conflicting requests|cannot install both"
-)
-_ENVIRONMENT_ERROR_RE = re.compile(r"Error:|Failed to")
-_UNAVAILABLE_SUMMARY_RE = re.compile(
-    r"(?m)^Transaction Summary:?\s*$|^Nothing to do\.?\s*$"
-)
-
-
-class _RepoError(Exception):
-    """A package check could not run: the repository environment is broken
-    (unreachable, bad repodata, failed download). Raised so the gate fails
-    closed instead of reading the failure as an unavailable package."""
-
-
-def is_installable(dnf: str, name: str, repos: tuple[str, ...]) -> bool:
-    """True when the pinned repository can satisfy a single package: a valid
-    Transaction Summary with no match or dependency error. The --assumeno run
-    declines the install, so dnf exits nonzero for a valid transaction; a
-    missing package or broken dependency is rejected explicitly rather than
-    accepted as that decline.
-
-    Raises _RepoError when the check cannot run at all (unreachable repo,
-    broken mount, failed download): that is an environment failure that must
-    fail the gate, never masquerade as a deliberate [unavailable] gap."""
-    out = subprocess.run(
-        [dnf, "--assumeno", "--disablerepo=*",
-         *(f"--enablerepo={r}" for r in repos),
-         "install", name],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        env={**os.environ, "LC_ALL": "C"}, check=False,
-    )
-    if _UNAVAILABLE_ERROR_RE.search(out.stdout):
-        # A missing package or dependency conflict is genuinely unavailable:
-        # check this before the environment regex, because dnf5 reports a
-        # missing package as "Failed to resolve the transaction:" (which also
-        # matches _ENVIRONMENT_ERROR_RE). Treating the unavailable marker first
-        # keeps a real [unavailable] entry from being misread as an environment
-        # error that fails the gate.
-        return False
-    if _ENVIRONMENT_ERROR_RE.search(out.stdout) or out.returncode == 125:
-        raise _RepoError(out.stdout.strip() or f"dnf exited {out.returncode}")
-    return (
-        out.returncode in (0, 1)
-        and re.search(_UNAVAILABLE_SUMMARY_RE, out.stdout)
-    )
-
-
-def assert_unavailable(dnf: str, repos: tuple[str, ...], overlay: Path) -> int:
-    """Fail (exit 1) when any [unavailable] entry is now installable in the
-    pinned repository. Each [unavailable] entry is a deliberate gap in Utah's
-    repositories -- a package the image cannot install and never should. That
-    gap is only real while the package stays unavailable; an upstream release
-    can make it installable without touching the manifest, silently adding a
-    package the contract never intended. Point at the manifest so the
-    contributor knows where to triage."""
-    unavailable = section(overlay, "unavailable")
-    if not unavailable:
-        print("No [unavailable] entries; nothing to assert")
-        return 0
-    installable = []
-    for name in unavailable:
-        try:
-            wanted = is_installable(dnf, name, repos)
-        except _RepoError as error:
-            # The environment could not be queried; fail the gate rather than
-            # read the failure as "this entry stays unavailable".
-            print(f"ERROR: repository check failed for {name!r} ({error}); "
-                  f"cannot confirm this [unavailable] entry is still unavailable",
-                  file=sys.stderr)
-            return 1
-        if wanted:
-            installable.append(name)
-    if installable:
-        print(f"ERROR: {len(installable)} [unavailable] entry(ies) are now installable:",
-              file=sys.stderr)
-        for name in installable:
-            print(f"  - {name} (see packages/utah.toml)", file=sys.stderr)
-        return 1
-    print(f"All {len(unavailable)} [unavailable] entries remain unavailable")
-    return 0
 
 
 EVR_QUERYFORMAT = "%{NAME} %{ARCH} %{EPOCH}:%{VERSION}-%{RELEASE}\n"
@@ -321,23 +257,93 @@ def find_skew(installed_map: dict[tuple[str, str], str],
     return skew
 
 
+FEDORA_LOGO_FILES = ["fedora-gdm-logo.png", "fedora-logo.png", "fedora-logo-small.png"]
+
+
+def logo_files_present(pixmaps: Path = Path("/usr/share/pixmaps")) -> list[str]:
+    """Fedora logo files still on disk below the pixmaps directory."""
+    return sorted(name for name in FEDORA_LOGO_FILES if (pixmaps / name).exists())
+
+
+def swap_distro_logos(rpm_path: Path,
+                      pixmaps: Path = Path("/usr/share/pixmaps")) -> int:
+    """Swap fedora-logos for generic-logos, Bluefin-LTS style (#378).
+
+    generic-logos provides the same paths (and system-logos, which gdm
+    requires), so dependents stay satisfied; erasing it --nodeps --nodb then
+    removes the files while keeping the rpmdb record, which leaves GDM with
+    no vendor logo file at all. Returns 0 on success, 1 with the reason on
+    stderr otherwise.
+    """
+    if not rpm_path.exists():
+        print(f"ERROR: {rpm_path} is missing; the Containerfile downloads it.", file=sys.stderr)
+        return 1
+    if not installed(["fedora-logos"]):
+        print("NOTE: fedora-logos is not installed; nothing to swap")
+    elif run("rpm", "--erase", "--nodeps", "fedora-logos"):
+        return 1
+    elif run("rpm", "--install", str(rpm_path)):
+        return 1
+    elif run("rpm", "--erase", "--nodeps", "--nodb", "generic-logos"):
+        return 1
+    problems = []
+    if installed(["fedora-logos"]):
+        problems.append("fedora-logos is still installed")
+    problems.extend(f"{name} is still on disk" for name in logo_files_present(pixmaps))
+    if problems:
+        print("ERROR: the logo swap did not take:", file=sys.stderr)
+        for line in problems:
+            print(f"  - {line}", file=sys.stderr)
+        return 1
+    print("Distro logos swapped for generic-logos (files erased, rpmdb kept).")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--resolve", action="store_true",
                         help="resolve the full transaction without installing packages")
-    parser.add_argument("--assert-unavailable", action="store_true",
-                        help="fail if any [unavailable] entry is now installable in the pinned repository")
+    parser.add_argument("--resolve-one", metavar="NAME", default=None,
+                        help="resolve one package without installing it; exit 0 when it "
+                             "resolves, 1 for unavailable, 2 when the probe cannot run")
     parser.add_argument("--repos-dir", type=Path, default=None,
                         help="directory containing .repo files (defaults to /etc/yum.repos.d or packages/)")
-    parser.add_argument("manifest", type=Path)
+    parser.add_argument("manifest", type=Path, nargs="?",
+                        help="required unless --resolve-one is given")
     parser.add_argument(
         "overlay", type=Path, nargs="?", default=None,
         help="defaults to utah.toml alongside the Bluefin manifest",
     )
     args = parser.parse_args()
-    overlay = args.overlay or args.manifest.with_name("utah.toml")
+    if args.resolve_one is not None:
+        if args.check or args.resolve:
+            parser.error("--resolve-one cannot be combined with --check or --resolve")
+    elif args.manifest is None:
+        parser.error("manifest is required unless --resolve-one is given")
+    overlay = args.overlay or (args.manifest.with_name("utah.toml") if args.manifest else None)
     repos = install_repos(args.repos_dir)
+
+    if args.resolve_one is not None:
+        # The single-name probe the unavailable-entry gate loops over. The
+        # full dnf output stays in the log for debugging; the marker line is
+        # what the gate parses.
+        result = dnf_assumeno(dnf_path(), repos, [args.resolve_one])
+        print(result.stdout, end="", flush=True)
+        if transaction_resolves(result):
+            verdict = 0
+        elif result.returncode in (0, 1) and re.search(
+                r"No match for argument|Unable to find a match|nothing provides|"
+                r"conflicting requests|cannot install both|"
+                r"none of the providers can be installed|cannot install the best candidate",
+                result.stdout, re.IGNORECASE):
+            verdict = 1
+        else:
+            # A repository failure or unexplained decline is not evidence that
+            # the package is unavailable. Keep it distinct for the outer gate.
+            verdict = 2
+        print(f"UTAH_RESOLVE_ONE {args.resolve_one} {verdict}", flush=True)
+        return verdict
 
     if args.check:
         # No rpmdb to consult off-image, so validate the manifests only.
@@ -359,30 +365,14 @@ def main() -> int:
 
     dnf = dnf_path()
     major = fedora_major()
-
-    if args.assert_unavailable:
-        return assert_unavailable(dnf, repos, args.manifest)
-
     packages = contract(args.manifest, overlay, major)
     build_deps = section(overlay, "build")
     excluded = section(args.manifest, "excluded")
 
     if args.resolve:
-        result = subprocess.run(
-            [dnf, "--assumeno", "--disablerepo=*",
-             *(f"--enablerepo={r}" for r in repos),
-             "-x", "PackageKit*", "install", *packages, *build_deps],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            env={**os.environ, "LC_ALL": "C"}, check=False,
-        )
+        result = dnf_assumeno(dnf, repos, [*packages, *build_deps])
         print(result.stdout, end="", flush=True)
-        # DNF exits nonzero when --assumeno declines a valid transaction.
-        # A missing package or dependency must never be accepted as that case.
-        errors = r"No match for argument|nothing provides|conflicting requests|cannot install both|Error:|Failed to"
-        summary = r"(?m)^Transaction Summary:?\s*$|^Nothing to do\.?\s*$"
-        if (result.returncode not in (0, 1)
-                or re.search(errors, result.stdout, re.IGNORECASE)
-                or not re.search(summary, result.stdout)):
+        if not transaction_resolves(result):
             return 1
         print(f"Resolved {len(set(packages + build_deps))} runtime and build packages on the pinned base")
         return 0
@@ -401,7 +391,10 @@ def main() -> int:
     print(f"Fedora release is {major}", flush=True)
     for pkg in section(overlay, "unavailable"):
         # Loud, not silent: a parity gap the operator should see in the log.
-        print(f"NOTE: {pkg} has no source in Utah's repositories and is skipped (see packages/utah.toml)")
+        # Not "skipped": [unavailable] also covers image-level gaps that were
+        # never part of the install request, so say what is true of both kinds
+        # -- the name is known-missing parity debt, not a dropped request.
+        print(f"NOTE: {pkg} is a tracked parity gap with no source in Utah's repositories and is not installed (see packages/utah.toml)")
 
     # Bluefin excludes PackageKit from its bulk install; an image-based system
     # must not carry a second package manager that can write to /usr.
@@ -435,6 +428,9 @@ def main() -> int:
             return rc
     else:
         print("No excluded packages found to remove.")
+
+    if swap_distro_logos(Path("/tmp/generic-logos.rpm")):
+        return 1
 
     # Fail loud on a stale transaction. The contract verifier only asserts
     # presence, so a layer-cached install of the previous factory's packages
