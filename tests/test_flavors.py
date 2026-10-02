@@ -144,6 +144,38 @@ class QueryTests(unittest.TestCase):
         self.assertIn("unknown query: list-gaming", result.stderr)
         self.assertEqual(result.stdout.strip(), "")
 
+    def test_suites_maps_every_flavor_to_its_suite_list(self):
+        cli = build_tree({
+            "flavors": ALL_FLAVORS,
+            "retired": {},
+            "suites": {"main": ["smoke", "common"],
+                       "nvidia": ["smoke", "common", "nvidia"],
+                       "gaming": ["smoke", "common"],
+                       "nvidia-gaming": ["smoke", "common", "nvidia"],
+                       },
+        })
+        result = run(cli, "suites")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [
+            {"image": "utah", "suites": ["smoke", "common"]},
+            {"image": "utah-nvidia", "suites": ["smoke", "common", "nvidia"]},
+            {"image": "utah-gaming", "suites": ["smoke", "common"]},
+            {"image": "utah-nvidia-gaming",
+             "suites": ["smoke", "common", "nvidia"]},
+        ])
+
+    def test_suites_fails_when_a_flavor_has_no_suite(self):
+        cli = build_tree({
+            "flavors": ALL_FLAVORS,
+            "retired": {},
+            "suites": {"main": ["smoke"], "nvidia": ["smoke"],
+                       "gaming": ["smoke"]},
+        })
+        result = run(cli, "suites")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("nvidia-gaming", result.stderr)
+        self.assertEqual(result.stdout.strip(), "")
+
     def test_malformed_config_fails_loudly(self):
         cli = build_tree("{not json")
         result = run(cli, "list")
