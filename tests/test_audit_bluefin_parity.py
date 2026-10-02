@@ -345,78 +345,6 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(json.loads(json.dumps(record))["ref"], "deadbeef")
 
 
-class HummingbirdBaseurlStaleTests(unittest.TestCase):
-    # The gate this issue fixes: compare_to_baseline must fail on a baseline
-    # captured against a different Hummingbird repo baseurl, not pass
-    # silently against an unchanged package set. A baseurl change moves
-    # packages between the Hummingbird and factory repodata the audit
-    # reads, shifting hummingbird-available without any name being added
-    # or removed, so the partition diff alone would read "no growth".
-
-    BASELINE = {
-        "ref": "old-bluefin",
-        "factory_ref": "old-factory",
-        "hummingbird_baseurl": "https://hummingbird/",
-        "hummingbird-available": ["a", "b"],
-        "factory-built": ["c"],
-        "nowhere": [],
-    }
-
-    # The same package set a later audit reads.
-    SAME = {
-        "hummingbird-available": ["a", "b"],
-        "factory-built": ["c"],
-        "nowhere": [],
-    }
-
-    def test_matching_baseurl_passes_with_no_messages(self):
-        self.assertEqual(
-            audit.compare_to_baseline(self.SAME, self.BASELINE, "https://hummingbird/"),
-            [],
-        )
-
-    def test_a_baseurl_change_is_reported_not_a_clean_run(self):
-        # The bug: same packages, only the Hummingbird repo URL changed.
-        # Without the baseurl comparison this returns [] and the stale
-        # baseline passes.
-        msgs = audit.compare_to_baseline(
-            self.SAME, self.BASELINE, "https://other.invalid/hummingbird/"
-        )
-        self.assertEqual(len(msgs), 1)
-        self.assertIn("stale baseline: hummingbird_baseurl", msgs[0])
-        self.assertIn("https://hummingbird/", msgs[0])
-        self.assertIn("https://other.invalid/hummingbird/", msgs[0])
-
-    def test_a_legacy_baseline_without_the_key_is_not_flagged(self):
-        # A baseline written before hummingbird_baseurl was recorded has no
-        # key to compare; the gate must not invent a mismatch against it.
-        legacy = {k: v for k, v in self.BASELINE.items()
-                  if k != "hummingbird_baseurl"}
-        self.assertEqual(
-            audit.compare_to_baseline(self.SAME, legacy, "any-baseurl/"), []
-        )
-
-    def test_a_real_regression_still_fails_when_baseurls_match(self):
-        grew = dict(self.SAME)
-        grew["hummingbird-available"] = ["a", "b", "brand-new"]
-        msgs = audit.compare_to_baseline(
-            grew, self.BASELINE, "https://hummingbird/"
-        )
-        self.assertEqual(len(msgs), 1)
-        self.assertIn("brand-new", msgs[0])
-
-    def test_a_stale_baseurl_is_reported_before_any_partition_growth(self):
-        # The stale-baseline verdict must never be masked by, or buried
-        # under, a growth report: it comes first in the message list.
-        grew = dict(self.SAME)
-        grew["nowhere"] = ["brand-new"]
-        msgs = audit.compare_to_baseline(
-            grew, self.BASELINE, "https://other.invalid/hummingbird/"
-        )
-        self.assertIn("stale baseline: hummingbird_baseurl", msgs[0])
-        self.assertEqual(len(msgs), 2)
-
-
 class PrimaryParsingTests(unittest.TestCase):
     def test_parse_primary_uses_latest_evr_for_repeated_names(self):
         # yum primary.xml rarely repeats a name, but a malformed repo can;
@@ -643,6 +571,7 @@ class StaleBaselineTests(unittest.TestCase):
             audit.compare_to_baseline(self.SAME, self.BASELINE, "old-bluefin", "old-factory", "https://hummingbird/"),
             [],
         )
+
     def test_a_bluefin_ref_bump_is_reported_not_a_clean_run(self):
         # The bug: same packages, only the Bluefin ref changed. Without the
         # ref comparison this returns [] and the stale baseline passes.
@@ -694,6 +623,7 @@ class StaleBaselineTests(unittest.TestCase):
         )
         self.assertIn("stale baseline: ref", msgs[0])
         self.assertEqual(len(msgs), 2)
+
     def _run_check(self, parts: dict, ref: str, factory_ref: str) -> tuple[int, str]:
         """Run cmd_check against BASELINE with the network stubbed out."""
         from argparse import Namespace
@@ -745,7 +675,15 @@ class StaleBaselineTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(err, "")
 
+
 class HummingbirdBaseurlStaleTests(unittest.TestCase):
+    # The gate this issue fixes: compare_to_baseline must fail on a baseline
+    # captured against a different Hummingbird repo baseurl, not pass
+    # silently against an unchanged package set. A baseurl change moves
+    # packages between the Hummingbird and factory repodata the audit
+    # reads, shifting hummingbird-available without any name being added
+    # or removed, so the partition diff alone would read "no growth".
+
     BASELINE = {
         "ref": "old-bluefin",
         "factory_ref": "old-factory",
@@ -754,6 +692,8 @@ class HummingbirdBaseurlStaleTests(unittest.TestCase):
         "factory-built": ["c"],
         "nowhere": [],
     }
+
+    # The same package set a later audit reads.
     SAME = {
         "hummingbird-available": ["a", "b"],
         "factory-built": ["c"],
@@ -776,12 +716,25 @@ class HummingbirdBaseurlStaleTests(unittest.TestCase):
         self.assertIn("https://other.invalid/hummingbird/", msgs[0])
 
     def test_a_legacy_baseline_without_the_key_is_not_flagged(self):
+        # A baseline written before hummingbird_baseurl was recorded has no
+        # key to compare; the gate must not invent a mismatch against it.
         legacy = {k: v for k, v in self.BASELINE.items() if k != "hummingbird_baseurl"}
         self.assertEqual(
             audit.compare_to_baseline(self.SAME, legacy, "old-bluefin", "old-factory", "any-baseurl/"), []
         )
 
+    def test_a_real_regression_still_fails_when_baseurls_match(self):
+        grew = dict(self.SAME)
+        grew["hummingbird-available"] = ["a", "b", "brand-new"]
+        msgs = audit.compare_to_baseline(
+            grew, self.BASELINE, "old-bluefin", "old-factory", "https://hummingbird/"
+        )
+        self.assertEqual(len(msgs), 1)
+        self.assertIn("brand-new", msgs[0])
+
     def test_a_stale_baseurl_is_reported_before_any_partition_growth(self):
+        # The stale-baseline verdict must never be masked by, or buried
+        # under, a growth report: it comes first in the message list.
         grew = dict(self.SAME)
         grew["nowhere"] = ["brand-new"]
         msgs = audit.compare_to_baseline(
@@ -789,6 +742,7 @@ class HummingbirdBaseurlStaleTests(unittest.TestCase):
         )
         self.assertIn("stale baseline: hummingbird_baseurl", msgs[0])
         self.assertEqual(len(msgs), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
