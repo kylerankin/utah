@@ -28,10 +28,10 @@ RUN dnf5 install -y --setopt=install_weak_deps=False \
 # hand-authored. `flatpak preinstall` applies that same set on installed systems.
 # The cache only accelerates builds; /var/lib is committed into the live image
 # and copied to the installed target offline.
-COPY src/install-flatpaks.sh /usr/libexec/utah-install-live-flatpaks
+COPY src/install-flatpaks.sh /usr/local/libexec/utah-install-live-flatpaks
 RUN --mount=type=cache,target=/var/cache/flatpak-dl,id=utah-flatpak \
-    chmod 0755 /usr/libexec/utah-install-live-flatpaks && \
-    /usr/libexec/utah-install-live-flatpaks
+    chmod 0755 /usr/local/libexec/utah-install-live-flatpaks && \
+    /usr/local/libexec/utah-install-live-flatpaks
 
 COPY src/ /tmp/utah-live-src/
 RUN chmod 0755 /tmp/utah-live-src/configure-live.sh && \
