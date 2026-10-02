@@ -8,9 +8,9 @@ the check beside it passed.
 
 | | |
 | --- | --- |
-| Captured | 2026-09-19T21:39:29Z |
-| Live ISO | `utah-live.iso`, 3.9G |
-| Installed image | `ghcr.io/projectbluefin/utah@sha256:d1869a16e7793cbefd1eb6857689b5b1b202b9ffee3a64ea8c7c303a0eb4375c` |
+| Captured | 2026-10-02T16:42:30Z |
+| Live ISO | `utah-live.iso`, 4.3G |
+| Installed image | `ghcr.io/projectbluefin/utah@sha256:3f67738557fcc64ea0a77eacd2e9c2125b886107aeaeb26ad642c876341cf12b` |
 | Root filesystem | btrfs on LUKS2, passphrase unlock |
 | Live session | GNOME, wayland |
 | Installed session | GNOME, wayland, user `utahtest` |
@@ -25,7 +25,12 @@ the check beside it passed.
 3. The installed disk boots on its own, with no ISO attached.
 4. Plymouth's passphrase prompt is answered and the root volume opens.
 5. The system reaches the graphical target rather than an emergency shell.
-6. The user logs in at the GDM greeter and gets a GNOME session.
+6. `bootc status` on the installed system reports the booted image as the
+   offline embedded payload, not a substitute reached over a network this
+   guest does not have.
+7. The user logs in at the GDM greeter and gets a GNOME session.
+8. Every default Flatpak in the Brewfile contract is present and listed by
+   `flatpak` on the installed, network-isolated system.
 
 ## Screenshots
 
@@ -51,4 +56,3 @@ graphical target. This is what proves the boot did not stop at a console.
 
 `utahtest`'s GNOME session, entered by typing the password at the
 greeter above.
-

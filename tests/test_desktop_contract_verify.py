@@ -112,12 +112,14 @@ class VerifyModeTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / "image"
         self.write("/usr/lib/os-release", self.os_release_text(OS_RELEASE))
+        self.write("/etc/os-release", self.os_release_text(OS_RELEASE))
         self.write("/usr/share/ublue-os/image-info.json", json.dumps(IMAGE_INFO))
         self.write("/usr/share/ublue-os/bluefin.png", "png")
         self.write("/etc/dconf/db/distro.d/01-bluefin-folders", "Bazaar App Store\n")
         self.write(BREWFILE, "".join(f'flatpak "{app}"\n' for app in APPS))
         self.write(REMOTE, f"[Flatpak Remote]\nUrl={REMOTE_URL}\n")
         self.enabled = {"gdm.service"}
+        self.user_enabled = {"pipewire.socket", "wireplumber.service"}
         self.masked = {"bootc-fetch-apply-updates.timer"}
 
     @staticmethod
@@ -140,6 +142,8 @@ class VerifyModeTests(unittest.TestCase):
         path.write_text(to_toml(contract))
         with patch.object(desktop, "Path", image_path_factory(self.root)), patch.object(
             desktop, "unit_enabled", lambda unit: unit in self.enabled
+        ), patch.object(
+            desktop, "user_unit_enabled", lambda unit: unit in self.user_enabled
         ), patch.object(desktop, "unit_masked", lambda unit: unit in self.masked), patch.object(
             desktop.sys, "argv", ["verify", str(path)]
         ):
@@ -155,6 +159,29 @@ class VerifyModeTests(unittest.TestCase):
         self.assertEqual(code, 1, f"verifier accepted the image; stderr was {errors!r}")
         self.assertIn(naming, errors)
         return errors
+
+
+class UserServiceTests(VerifyModeTests):
+    """Hummingbird's user preset disables every per-user service but dbus, so
+    an installed Utah had no audio server. The contract's user_enabled list
+    is checked with systemctl --global."""
+
+    def contract_with_user_units(self, *units):
+        contract = base_contract()
+        contract["services"] = dict(contract["services"], user_enabled=list(units))
+        return contract
+
+    def test_globally_enabled_user_services_pass_and_are_counted(self):
+        code, out, errors = self.verify(self.contract_with_user_units("pipewire.socket", "wireplumber.service"))
+        self.assertEqual(code, 0, errors)
+        self.assertIn("2 user services", out)
+
+    def test_a_disabled_audio_service_is_rejected_by_name(self):
+        self.user_enabled.discard("wireplumber.service")
+        self.assert_rejected(
+            self.contract_with_user_units("pipewire.socket", "wireplumber.service"),
+            naming="required user service is not enabled globally: wireplumber.service",
+        )
 
 
 class CompliantImageTests(VerifyModeTests):
@@ -175,8 +202,7 @@ class CompliantImageTests(VerifyModeTests):
 
     def test_verify_mode_reads_the_image_not_the_build_tree(self):
         self.remove("/usr/lib/os-release")
-        with self.assertRaises(FileNotFoundError):
-            self.verify()
+        self.assert_rejected(naming="required file is missing: /usr/lib/os-release")
 
 
 class RequiredFileTests(VerifyModeTests):
@@ -209,6 +235,35 @@ class OsReleaseTests(VerifyModeTests):
         values = {key: value for key, value in OS_RELEASE.items() if key != "ID"}
         self.write("/usr/lib/os-release", self.os_release_text(values))
         self.assert_rejected(naming="os-release ID must be 'utah', got None")
+
+    def test_a_stale_etc_os_release_is_reported(self):
+        # The About panel reads /etc/os-release; a base that ships it as a
+        # regular file keeps showing the base identity if it is not synced.
+        values = dict(OS_RELEASE, NAME="Fedora Linux", ID="fedora")
+        self.write("/etc/os-release", self.os_release_text(values))
+        errors = self.assert_rejected(naming="/etc/os-release ID must be 'utah', got 'fedora'")
+        self.assertNotIn("/usr/lib/os-release", errors)
+
+    def test_a_stale_usr_lib_os_release_is_reported_with_its_path(self):
+        values = dict(OS_RELEASE, ID="fedora")
+        self.write("/usr/lib/os-release", self.os_release_text(values))
+        errors = self.assert_rejected(naming="/usr/lib/os-release ID must be 'utah', got 'fedora'")
+        self.assertNotIn("/etc/os-release", errors)
+
+    def test_a_symlinked_etc_os_release_follows_the_canonical_file(self):
+        # Symlink bases: /etc/os-release -> ../usr/lib/os-release.
+        (self.root / "etc/os-release").unlink()
+        (self.root / "etc/os-release").symlink_to("../usr/lib/os-release")
+        code, _, errors = self.verify()
+        self.assertEqual(code, 0, errors)
+        values = dict(OS_RELEASE, ID="fedora")
+        self.write("/usr/lib/os-release", self.os_release_text(values))
+        errors = self.assert_rejected(naming="/etc/os-release ID must be 'utah', got 'fedora'")
+        self.assertIn("/usr/lib/os-release ID must be 'utah', got 'fedora'", errors)
+
+    def test_a_missing_etc_os_release_is_reported(self):
+        self.remove("/etc/os-release")
+        self.assert_rejected(naming="required file is missing: /etc/os-release")
 
 
 class ImageInfoTests(VerifyModeTests):

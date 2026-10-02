@@ -3,10 +3,7 @@
 # shellcheck source=/dev/null
 source /usr/lib/ublue/setup-services/libsetup.sh
 
-# Compat shim: common libsetup.sh builds older than projectbluefin/common #1196
-# have only version-script, which records the version before the body runs, and
-# no version-script-check/version-script-commit pair. Fall back to that legacy
-# gate and make the commit a no-op, so this hook works against both contracts.
+# Match the check/commit migration in #259, including older common images.
 if ! declare -F version-script-check >/dev/null; then
     version-script-check() { version-script "$@"; }
     version-script-commit() { :; }
@@ -21,9 +18,13 @@ ARCH=$(arch)
 if [ "$ARCH" != "aarch64" ] ; then
 	mkdir -p "/var/lib/flatpak/extension/org.mozilla.firefox.systemconfig/${ARCH}/stable/defaults/pref"
 	rm -f "/var/lib/flatpak/extension/org.mozilla.firefox.systemconfig/${ARCH}/stable/defaults/pref/*bluefin*.js"
-	/usr/bin/cp -rf /usr/share/ublue-os/firefox-config/* "/var/lib/flatpak/extension/org.mozilla.firefox.systemconfig/${ARCH}/stable/defaults/pref/"
+	# firefox-config is optional; skip the default-preferences copy when it is
+	# absent rather than failing the first-boot hook on a glob that matches nothing.
+	if compgen -G "/usr/share/ublue-os/firefox-config/*" >/dev/null 2>&1; then
+		/usr/bin/cp -rf "/usr/share/ublue-os/firefox-config/"* "/var/lib/flatpak/extension/org.mozilla.firefox.systemconfig/${ARCH}/stable/defaults/pref/"
+	else
+		echo "firefox-config not present; skipping Firefox default preferences"
+	fi
 fi
 
-# Record success only after the body ran, so a failing first-boot hook retries
-# next boot instead of being permanently skipped (common #1196 new contract).
 version-script-commit flatpaks privileged 1

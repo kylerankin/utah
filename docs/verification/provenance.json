@@ -1,6 +1,6 @@
 {
-  "image": "ghcr.io/projectbluefin/utah@sha256:d1869a16e7793cbefd1eb6857689b5b1b202b9ffee3a64ea8c7c303a0eb4375c",
-  "source_sha": "dbd1425a17e1e8e3251f0dcb4de777161b390133",
-  "build_run": "35454845634",
-  "e2e_run": "35469913325"
+  "image": "ghcr.io/projectbluefin/utah@sha256:3f67738557fcc64ea0a77eacd2e9c2125b886107aeaeb26ad642c876341cf12b",
+  "source_sha": "4d5853b05160fdc13b7922af603b6f6c67d14e7d",
+  "build_run": "37028253372",
+  "e2e_run": "37031124031"
 }

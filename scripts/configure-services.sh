@@ -73,11 +73,18 @@ enable_unit tailscaled.service
 enable_unit uupd.timer
 enable_unit ublue-system-setup.service
 enable_unit systemd-resolved.service
+# See the preset: gated on systemd-boot by drop-in, skipped elsewhere (#363).
+enable_unit systemd-boot-update.service
 enable_unit bootc-unified-storage.service
 # input-remapper is installed by Bluefin's package set, but without its root
 # daemon running, udev autoload fails on input devices and the GUI prompts for
 # root credentials on launch. Enable it next to the desktop units; see #99.
 enable_unit input-remapper.service
+enable_unit ModemManager.service
+# Printing on demand, as Fedora's preset enables it for Bluefin; Hummingbird's
+# 99-default-disable would leave it off.
+enable_unit cups.socket
+enable_unit cups.path
 
 # Bluefin's Brewfile and Bazaar preinstall hook need the Flathub remote before
 # first boot. Keep this as a .flatpakrepo descriptor so the remote is available
@@ -136,6 +143,23 @@ else
 fi
 
 # These are global user-service presets, so systemctl needs --global.
+#
+# The desktop's per-user services. Hummingbird's user preset enables only
+# dbus and then disables everything else. Fedora's (and so Bluefin's) enables
+# these, and without them an installed Utah had no audio server at all. See
+# /usr/lib/systemd/user-preset/85-utah-desktop.preset; the desktop contract
+# asserts the result (services.user_enabled).
+# grub-boot-success.timer is deliberately absent: /boot is read-only at runtime
+# so the mark can never be written (see the user preset, #364).
+for unit in pipewire.socket pipewire-pulse.socket wireplumber.service \
+            xdg-user-dirs.service \
+            obex.service mpris-proxy.service; do
+    if user_unit_exists "${unit}"; then
+        systemctl --global enable "${unit}"
+    else
+        echo "user unit ${unit} is not installed; skipping" >&2
+    fi
+done
 if user_unit_exists podman-auto-update.timer; then
     systemctl --global enable podman-auto-update.timer
 fi
@@ -164,7 +188,18 @@ rm -rf /tmp/uupd
 
 # Build-only extension tooling is not part of the desktop image. unzip stays:
 # it is in [parity] as well as [build], because Bluefin ships it to users.
+#
+# No --no-autoremove: that flag kept the build dependency closure (ninja-build,
+# meson-srpm-macros, libsass, *-devel chains) in the shipping image. The
+# default remove cleans up dependencies orphaned by this transaction, which is
+# exactly the closure. Decisions D1 (docs/bluefin-package-gaps.md).
 DNF="$(command -v dnf5 || command -v dnf)"
-"$DNF" -y remove --no-autoremove dbus-devel glib2-devel meson sassc
+"$DNF" -y remove dbus-devel glib2-devel meson sassc
+for pkg in dbus-devel glib2-devel meson sassc; do
+    if rpm -q "$pkg" >/dev/null 2>&1; then
+        echo "ERROR: build tooling $pkg still installed after removal" >&2
+        exit 1
+    fi
+done
 
 echo "Utah desktop service configuration complete"

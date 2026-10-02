@@ -16,10 +16,25 @@ default:
 # under tests/ that holds test modules. Bare `unittest discover` rooted at
 # tests/ skipped subdirectories such as tests/unit/ silently -- it reported
 # OK whether the tests there passed, failed, or never ran.
+#
+# The third-party modules the suite needs are declared in
+# tests/requirements.txt, not installed silently here. A quiet `pip install ||
+# true` hid its own failure: the modules stayed missing and the suite reported
+# 46 errors that read like regressions instead of one message naming the
+# dependency.
 test:
     #!/usr/bin/env bash
     set -euo pipefail
-    pip install --quiet pyyaml 2>/dev/null || true
+    missing=()
+    for module in yaml jsonschema; do
+        python3 -c "import ${module}" 2>/dev/null || missing+=("${module}")
+    done
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "host test dependencies missing: ${missing[*]}" >&2
+        echo "they are declared in tests/requirements.txt; install them with:" >&2
+        echo "    pip install -r tests/requirements.txt" >&2
+        exit 1
+    fi
     python3 tests/run_suite.py
 
 check:
@@ -55,6 +70,9 @@ check:
     test -f scripts/verify-desktop-contract.py
     test -f scripts/verify-gnome-extensions.py
     test -f scripts/mirror-shim.sh
+    test -f scripts/install-v4l2loopback.sh
+    test -f scripts/image-repo.sh
+    test -f packages/RPM-GPG-KEY-fedora-44-primary
     test -f contracts/bluefin-desktop.toml
     # The reusable image workflow checks out this repository without
     # submodules. Populate them here before validating the source contract;
@@ -63,6 +81,8 @@ check:
     git submodule update --init --recursive
     python3 scripts/verify-desktop-contract.py --check contracts/bluefin-desktop.toml
     python3 scripts/verify-gnome-extensions.py --source
+    # Every Bluefin package Utah lacks must be triaged (baselines/triage.toml).
+    python3 scripts/image-baseline.py check
     grep -q '/system_files/bluefin' Containerfile
     grep -q 'flatpak-preinstall.service' scripts/configure-services.sh
     grep -q 'flathub.flatpakrepo' scripts/configure-services.sh
@@ -72,6 +92,12 @@ check:
     test -f iso/live/src/etc/bootc-installer/images.json
     test -f iso/live/src/etc/bootc-installer/recipe.json
     test -f iso/scripts/build-iso.sh
+    test -f iso/scripts/build-iso-tacklebox.sh
+    test -f iso/scripts/tacklebox-boot-gate.sh
+    test -f iso/live/Containerfile.tacklebox
+    grep -q 'live_customize' iso/scripts/build-iso-tacklebox.sh
+    grep -q 'offline_payloads' iso/scripts/build-iso-tacklebox.sh
+    grep -q 'Secure Boot DISABLED' iso/scripts/build-iso-tacklebox.sh
     python3 -m json.tool iso/live/src/etc/bootc-installer/images.json >/dev/null
     python3 -m json.tool iso/live/src/etc/bootc-installer/recipe.json >/dev/null
     grep -q 'org.bootcinstaller.Installer' iso/live/src/install-flatpaks.sh
@@ -133,6 +159,10 @@ check:
       echo 'no recipe may name a flavored image; use flavors.py image' >&2
       exit 1
     fi
+    if grep -rnE 'utah-(nvidia|gaming)' iso/scripts/; then
+      echo 'no ISO script may name a flavored image; use flavors.py image' >&2
+      exit 1
+    fi
 
 # Verify branding, desktop defaults, first-boot Flatpak policy, and service
 # enablement in an already-composed image. The same verifier runs in the
@@ -145,7 +175,7 @@ check-desktop-contract image_ref="localhost/utah:testing":
       -v "$PWD/scripts/verify-desktop-contract.py:/tmp/verify-desktop-contract.py:ro" \
       "{{ image_ref }}" /tmp/verify-desktop-contract.py /tmp/bluefin-desktop.toml
     podman run --rm --entrypoint /usr/bin/python3 \
-      "{{ image_ref }}" /usr/local/libexec/utah-verify-gnome-extensions
+      "{{ image_ref }}" /usr/libexec/utah-verify-gnome-extensions
 
 # Fail fast when a contract package is in none of the repositories the image
 # actually enables, instead of discovering it twenty minutes into a build.
@@ -160,22 +190,28 @@ check-desktop-contract image_ref="localhost/utah:testing":
 # three slow dnf resolves to reach the same answer.
 #
 # Resolves dependencies on the pinned base and package image. Needs podman and network.
+# Then probes each [unavailable] entry the same way: a blocked entry that now
+# resolves is stale parity debt, and the base image is already cached.
 check-repos:
     #!/usr/bin/env bash
     set -uo pipefail
-    for attempt in 1 2 3; do
-      python3 scripts/check-repo-availability.py packages/bluefin.toml packages/utah.toml
-      status=$?
-      if [ "$status" -ne 125 ]; then
-        exit "$status"
-      fi
-      echo "check-repos: container engine could not run (exit 125), attempt ${attempt}/3" >&2
-      if [ "$attempt" -ne 3 ]; then
-        sleep $(( attempt * 15 ))
-      fi
-    done
-    echo "check-repos: giving up after 3 engine failures; the registry is not serving the pinned image" >&2
-    exit 125
+    gate() {
+      for attempt in 1 2 3; do
+        python3 scripts/check-repo-availability.py "$@"
+        status=$?
+        if [ "$status" -ne 125 ]; then
+          return "$status"
+        fi
+        echo "check-repos: container engine could not run (exit 125), attempt ${attempt}/3" >&2
+        if [ "$attempt" -ne 3 ]; then
+          sleep $(( attempt * 15 ))
+        fi
+      done
+      echo "check-repos: giving up after 3 engine failures; the registry is not serving the pinned image" >&2
+      return 125
+    }
+    gate packages/bluefin.toml packages/utah.toml || exit "$?"
+    gate --check-unavailable packages/bluefin.toml packages/utah.toml
 
 # packages/bluefin.toml is a verbatim copy of Bluefin's base.toml pinned to
 # the revision in packages/.bluefin-parity-ref.  Drift here is a parity bug,
@@ -198,6 +234,81 @@ check-parity:
       echo "packages/bluefin.toml has drifted from projectbluefin/bluefin@${ref}" >&2
       exit 1
     fi
+
+# Re-measure Utah against the published Bluefin and Dakota images: package
+# lists and user-visible files from inside each image, and Dakota's SBOM.
+# Needs podman and gh. Then review baselines/GAP.md and triage new gaps.
+baselines bluefin="ghcr.io/ublue-os/bluefin:stable" utah="ghcr.io/projectbluefin/utah:testing":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for pair in "{{ bluefin }} bluefin" "{{ utah }} utah"; do
+      read -r image dir <<<"$pair"
+      podman pull -q "$image" >/dev/null
+      python3 scripts/image-baseline.py extract "$image" "baselines/$dir"
+    done
+    run=$(gh run list -R projectbluefin/dakota -w publish.yml -b main -s success -L 20 \
+      --json databaseId --jq '.[].databaseId' | while read -r id; do
+        gh api "repos/projectbluefin/dakota/actions/runs/$id/artifacts" \
+          --jq '.artifacts[].name' | grep -qx sbom-dakota && { echo "$id"; break; }
+      done)
+    python3 scripts/image-baseline.py dakota "$run" baselines/dakota
+    python3 scripts/image-baseline.py gap
+
+# Partition every Bluefin package Utah lacks by where it could come from:
+# hummingbird-available / factory-built / nowhere. The 2026-09-30 bare-metal
+# audit (#382) ran this pipeline by hand against the OCI image feeds. This
+# is the same pipeline as a single recipe so a future audit -- or a
+# scheduled drift report -- does not reinvent the manual sequence.
+#
+# Pulls the pinned factory OCI repodata (Containerfile PACKAGE_IMAGE_SHA)
+# and Hummingbird's primary.xml directly. No podman run is started; the
+# audit is a static-repodata read against the same pinned inputs
+# scripts/check-repo-availability.py mounts for `just check-repos`, so
+# the verdict and the install transaction cannot disagree on what the
+# repositories offer.
+#
+#   just audit-bluefin-parity                # partition + print, do not write
+#   just audit-bluefin-parity --write        # record the new baseline after printing
+#   just audit-bluefin-parity --check        # compare against the recorded baseline
+#
+# Pass `--ref=<sha|tag|branch>` to audit against a Bluefin revision that
+# is not yet committed to packages/.bluefin-parity-ref. The default is the
+# pinned SHA in that file.
+#
+# Args are interpolated into the body with `{{args}}`, not read from `$@`: a
+# `just` shebang recipe receives no positional parameters (`$# = 0`), so a
+# `"$@"` loop never sees the flags. Value flags use the `--key=value` form
+# because that is all the forwarding script's `case` matches; the flags are
+# re-parsed there.
+audit-bluefin-parity *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    subcommand="run"
+    forward=()
+    for arg in {{args}}; do
+      case "$arg" in
+        --check) subcommand="check" ;;
+        --write) forward+=(--write) ;;
+        --ref=*) forward+=("$arg") ;;
+        *) echo "audit-bluefin-parity: unknown argument: $arg" >&2; exit 64 ;;
+      esac
+    done
+    python3 scripts/audit-bluefin-parity.py "$subcommand" "${forward[@]+"${forward[@]}"}"
+
+# Gate: fail when an audit partition grew past baselines/audit-baseline.json.
+# The script also fails on a missing baseline; first run is `just
+# audit-bluefin-parity --write` to record the starting state of the debt.
+check-audit-parity *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    forward=()
+    for arg in {{args}}; do
+      case "$arg" in
+        --ref=*) forward+=("$arg") ;;
+        *) echo "check-audit-parity: unknown argument: $arg" >&2; exit 64 ;;
+      esac
+    done
+    python3 scripts/audit-bluefin-parity.py check "${forward[@]+"${forward[@]}"}"
 
 image_name base_name stream flavor:
     @python3 scripts/flavors.py image "{{ flavor }}"
@@ -420,6 +531,20 @@ iso stream="testing" debug="0":
     podman image exists "$ref" || { echo "Image $ref not found; run just build-ghcr {{ image }} {{ stream }} main" >&2; exit 1; }
     mkdir -p "{{ base_dir }}"
     bash iso/scripts/build-iso.sh "$ref" "$(realpath "{{ base_dir }}")/utah-live.iso" "Utah Live" "{{ debug }}" "ghcr.io/{{ repo_organization }}/{{ image }}:{{ stream }}"
+
+# Fast live ISO via tacklebox for any flavors.json flavor, including variants
+# this project publishes no ISO for. Two stages: a rootless Flatpak bake
+# (bwrap needs the userns tacklebox's rootful customize containers lack),
+# then root assembly. Unsigned systemd-boot chain: boots with Secure Boot
+# DISABLED only. For the Secure Boot ISO use `just iso`.
+#   just iso-tacklebox main              # from localhost/utah:testing
+#   just iso-tacklebox main testing ghcr testing-20260922-256d837
+iso-tacklebox flavor="main" stream="testing" repo="local" tag="" debug="0":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="{{ tag }}"
+    if [[ -z "$tag" ]]; then tag="{{ stream }}"; fi
+    sudo bash iso/scripts/build-iso-tacklebox.sh "{{ flavor }}" "{{ stream }}" "{{ repo }}" "$tag" "{{ debug }}"
 
 # Boot the live ISO with QEMU-for-Docker and expose its noVNC console.
 boot-iso:

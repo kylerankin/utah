@@ -73,7 +73,7 @@ class EvidenceTests(unittest.TestCase):
         for required in ["OVERLAY_FS", "SQUASHFS", "SQUASHFS_ZSTD", "EROFS_FS",
                          "BTRFS_FS", "BLK_DEV_LOOP", "DM_SNAPSHOT", "DM_CRYPT",
                          "CRYPTO_XTS", "FUSE_FS", "FS_VERITY", "SYSFB_SIMPLEFB",
-                         "DRM_SIMPLEDRM"]:
+                         "DRM_SIMPLEDRM", "VIDEO_DEV"]:
             self.assertIn(required, names)
             self.assertRegex(script, rf"--(?:enable|module) {required}(?:\s|$)")
         self.assertEqual(script.count("verify_config /usr/lib/utah/ogc-kernel.config"), 2)
@@ -341,6 +341,22 @@ GNOME 51.beta
 Mutter (Wayland)
 """
 
+    # Verbatim excerpt from fastfetch-ocr.txt in the iso-diagnostics-utah-nvidia
+    # artifact of run 36769782907. Tesseract substituted inside the sentinel
+    # fragment itself ("E2E" read as "£26") while reading the "-FASTFETCH"
+    # suffix and the whole fastfetch body cleanly -- the same misread failed
+    # four consecutive flavors and runs (#375), and identical sentinel pixels
+    # read clean the rest of the time.
+    SUBSTITUTED_TRANSCRIPT = """\\‘uran-£26-FASTFETCH
+[utahtest@utah-luks-test ~]$
+
+Utah (Version: testing-20260930-9f3baa2)
+Linux 7.2.7-200.fc44.x86_64
+
+GNOME 51.0
+Mutter (Wayland)
+"""
+
     def matches(self, transcript):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "fastfetch-ocr.txt"
@@ -361,6 +377,22 @@ Mutter (Wayland)
 
     def test_rejects_fastfetch_body_without_the_sentinel(self):
         self.assertFalse(self.matches("Kernel: 7.1.8-100.fc43.x86_64\nGNOME 51.beta\n"))
+
+    def test_accepts_transcript_with_substituted_sentinel_fragment(self):
+        self.assertTrue(self.matches(self.SUBSTITUTED_TRANSCRIPT))
+
+    def test_rejects_suffix_with_kernel_but_no_second_body_token(self):
+        self.assertFalse(self.matches(
+            "uran-£26-FASTFETCH\nLinux 7.2.7-200.fc44.x86_64\n2 mins\n"))
+
+    def test_rejects_suffix_with_body_but_no_kernel_token(self):
+        self.assertFalse(self.matches(
+            "uran-£26-FASTFETCH\nGNOME 51.0\nMutter (Wayland)\n"))
+
+    def test_harness_rereads_the_same_screenshot_before_reshooting(self):
+        script = (ROOT / "iso/scripts/luks-e2e.sh").read_text()
+        self.assertIn("for _ocr in 1 2 3", script)
+        self.assertIn("break 2", script)
 
     def test_rejects_an_empty_or_missing_transcript(self):
         self.assertFalse(self.matches(""))
@@ -403,11 +435,17 @@ class FlatpakRetryTests(unittest.TestCase):
         result = self.drive('flatpak() { attempts=$((attempts+1)); [ "$attempts" -ge 3 ]; }')
         self.assertEqual(result.stdout.strip(), "rc=0 attempts=3", result.stderr)
 
-    def test_a_persistent_failure_still_fails_after_three_attempts(self):
+    def test_a_longer_outage_is_retried_and_succeeds_on_the_fifth_attempt(self):
+        # Run 36230660725 lost utah to dl.flathub.org timeouts on attempts
+        # 1-3 spread over ~20 minutes: the retry budget is five attempts.
+        result = self.drive('flatpak() { attempts=$((attempts+1)); [ "$attempts" -ge 5 ]; }')
+        self.assertEqual(result.stdout.strip(), "rc=0 attempts=5", result.stderr)
+
+    def test_a_persistent_failure_still_fails_after_five_attempts(self):
         # The point is resilience, not swallowing errors: a repository that is
         # genuinely gone must still fail the build.
         result = self.drive("flatpak() { attempts=$((attempts+1)); return 1; }")
-        self.assertEqual(result.stdout.strip(), "rc=1 attempts=3", result.stderr)
+        self.assertEqual(result.stdout.strip(), "rc=1 attempts=5", result.stderr)
 
     def test_every_network_install_goes_through_the_retry(self):
         script = self.SCRIPT.read_text()
@@ -576,3 +614,38 @@ class ConcurrencyTests(unittest.TestCase):
         import yaml
         build = yaml.safe_load((ROOT / ".github/workflows/build.yml").read_text())
         self.assertIn("github.ref", build["concurrency"]["group"])
+
+
+class BuildToolingRemovalTests(unittest.TestCase):
+    """The [build] toolchain must not ship (D1, docs/bluefin-package-gaps.md).
+
+    configure-services.sh removes the extension build tooling after the build.
+    Passing --no-autoremove kept the dependency closure (ninja-build,
+    meson-srpm-macros, libsass, *-devel chains) in the image; the default
+    remove cleans up dependencies orphaned by the transaction.
+    """
+
+    def setUp(self):
+        import tomllib
+        manifest = tomllib.loads((ROOT / "packages" / "utah.toml").read_text())
+        self.build = manifest["build"]["packages"]
+        self.script = (ROOT / "scripts" / "configure-services.sh").read_text()
+
+    def remove_line(self):
+        lines = [line for line in self.script.splitlines()
+                 if "remove" in line and "dbus-devel" in line]
+        self.assertEqual(len(lines), 1,
+                         "expected exactly one build-tooling removal command")
+        return lines[0]
+
+    def test_every_build_package_but_unzip_is_removed(self):
+        # unzip is in [parity] as well as [build]: Bluefin ships it to users.
+        line = self.remove_line()
+        for pkg in self.build:
+            if pkg == "unzip":
+                continue
+            self.assertIn(pkg, line, f"{pkg} from [build] is not removed")
+
+    def test_removal_cleans_the_dependency_closure(self):
+        self.assertNotIn("--no-autoremove", self.remove_line(),
+                         "removal must let dnf clean the orphaned build closure")

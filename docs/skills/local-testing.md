@@ -176,7 +176,8 @@ Production live boot entries configure:
 
 ### Secure Boot strategy
 
-- **Live ISO bootloader**: The live image installs `systemd-boot-unsigned`.
+- **Live ISO bootloader**: The image carries `systemd-boot-unsigned`, which the
+  live ISO boots from.
   On hardware with Microsoft UEFI Secure Boot enabled, firmware will reject the
   unsigned EFI loader unless Secure Boot is temporarily disabled in UEFI setup.
   Production releases will incorporate Fedora's signed shim (`shimx64.efi`) and
@@ -186,12 +187,13 @@ Production live boot entries configure:
   require either disabling Secure Boot or manually enrolling a Machine Owner Key
   (MOK) into UEFI NVRAM using `mokutil` (planned tooling; no automated helper
   currently exists in-tree).
-- **Custom flavor modules (`nvidia`, `nvidia-gaming`)**: Out-of-tree NVIDIA
-  kernel modules compiled against the base or OGC kernel run under kernel
-  lockdown when Secure Boot is active. Unsigned modules fail to load; signing
-  modules with an enrolled MOK key (e.g. via the kernel's `sign-file` utility)
-  is planned for future release pipelines, but currently module signing is not
-  implemented in-tree and Secure Boot must remain disabled.
+- **Custom flavor modules (`nvidia`, `nvidia-gaming`) and v4l2loopback (every
+  flavor)**: Out-of-tree NVIDIA and v4l2loopback kernel modules compiled
+  against the base or OGC kernel run under kernel lockdown when Secure Boot is
+  active. Unsigned modules fail to load; signing modules with an enrolled MOK
+  key (e.g. via the kernel's `sign-file` utility) is planned for future release
+  pipelines, but currently module signing is not implemented in-tree and Secure
+  Boot must remain disabled.
 
 `iso/live/src/install-flatpaks.sh` pins the bootc-installer Flatpak bundle to
 a specific `tuna-os/bootc-installer` release rather than resolving
@@ -204,6 +206,51 @@ so there is no tag-name continuity to lean on when bumping it.
 take the digest from that release's `org.bootcinstaller.Installer.flatpak`
 asset (`digest` field of `gh api repos/tuna-os/bootc-installer/releases/tags/<tag>`,
 or download and `sha256sum` it) rather than guessing or reusing an old value.
+
+## Tacklebox ISOs (unpublished variants)
+
+`just iso-tacklebox` builds a live ISO via
+[tacklebox](https://github.com/tuna-os/tacklebox) (systemd-boot + tbox-live,
+no anaconda) for any `config/flavors.json` flavor -- including variants this
+project publishes no ISO for. Two stages: `iso/live/Containerfile.tacklebox`
+pre-bakes the live Flatpaks rootless (flatpak's bwrap sandbox needs the user
+namespace that tacklebox's rootful customize containers lack), then tacklebox
+assembles the ISO with `configure-live.sh` as the `live_customize` script and
+the published image ref embedded as an offline payload, so the live desktop
+matches the standard ISO:
+
+```bash
+just iso-tacklebox main                              # from localhost/utah:testing
+just iso-tacklebox main testing ghcr testing-20260922-256d837
+```
+
+The script (`iso/scripts/build-iso-tacklebox.sh`) resolves flavored image
+names through `scripts/flavors.py image` -- no literals, enforced by
+`just check` -- requires root (loop devices, mkfs), and writes
+`output/utah-<flavor>-tacklebox.iso`. Tacklebox itself comes from
+a digest-pinned `ghcr.io/tuna-os/tacklebox` image (see `TACKLEBOX_IMAGE` in
+the script) unless `TACKLEBOX_FROM_SOURCE=1`; a host
+binary wins when present (`TACKLEBOX_BIN`, or `tacklebox` on `PATH`), which
+matters on hosts where nested podman breaks container DNS (observed: the
+customize container's resolver unreachable from inside the tacklebox
+container while identical host-level runs resolve fine).
+
+Two hard differences from `just iso`:
+
+- **Secure Boot: unsupported.** Tacklebox emits an unsigned systemd-boot
+  chain. These ISOs boot with Secure Boot disabled only.
+- **Kargs are `enforcing=0 console=ttyS0,115200n8`**, same rationale as the
+  standard live ISO (unlabeled squashfs root, serial E2E).
+
+The same images build in the browser at
+[iso.tunaos.org](https://iso.tunaos.org) via `?image=` presets -- no Utah-side
+registration exists because none is needed: `projectbluefin` is on the relay
+org allowlist (`ORGS` in `worker/cors-shim.js`, tuna-os/iso-builder), and any
+bootable container (kernel under `/usr/lib/modules`, systemd) is accepted.
+Shareable form: `https://iso.tunaos.org/?image=projectbluefin/<name>:<tag>`
+using a dated published tag (`testing-*`), since Utah publishes no floating
+`testing` tag. Verify a preset by confirming the relay mints a pull token for
+the scope (`/token?scope=repository:projectbluefin/<name>:pull`).
 
 ## Verification
 
@@ -225,6 +272,15 @@ read falls back to `sudo` when `bootc status --json` returns nothing to the
 unprivileged test user.
 Read the recipe and script prerequisites before running it: it creates test
 accounts and requires local QEMU/KVM access, not a production installation.
+
+The installed-boot gate also checks `/var/lib/logrotate` before starting
+`logrotate.service`, then requires a nonempty `logrotate.status` state file.
+Do not create the directory in the test: `scripts/clean-stage.sh` removes
+`/var/lib` during composition, so writable service state must be recreated at
+boot by a rule shipped under `system_files/shared/usr/lib/tmpfiles.d/`.
+`utah-logrotate.conf` supplies the root-owned directory for logrotate (#386).
+A build-time `mkdir` or a clean bootc lint result alone does not prove that
+service state exists on a fresh installed system.
 
 Passing runs refresh `docs/verification/README.md`, its screenshots, and the
 delimited verification block in the root README. These are historical local

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-24",
+  "generated_at": "2026-10-02",
   "generator": "scripts/generate-site-data.py",
   "groups": [
     {
@@ -43,6 +43,8 @@
         "libblockdev-mpath",
         "libcamera-gstreamer",
         "libcamera-tools",
+        "libgda",
+        "libgda-sqlite",
         "libratbag-ratbagd",
         "libva-utils",
         "libxcrypt-compat",
@@ -54,6 +56,7 @@
         "openrgb-udev-rules",
         "openssh-askpass",
         "pipewire-libs-extra",
+        "ppp",
         "python3-gnome-ponytail-daemon",
         "squashfs-tools",
         "switcheroo-control",
@@ -62,7 +65,8 @@
         "wl-clipboard",
         "xdg-terminal-exec",
         "xorriso",
-        "zenity"
+        "zenity",
+        "zsh"
       ],
       "title": "Bluefin contract",
       "transient": false
@@ -73,13 +77,19 @@
       "packages": [
         "glibc-all-langpacks",
         "gnome-control-center",
+        "gnome-initial-setup",
         "gnome-session",
         "gnome-settings-daemon",
         "gnome-shell",
         "gsettings-desktop-schemas",
         "gtk4",
+        "gvfs-afc",
+        "gvfs-gphoto2",
+        "gvfs-mtp",
         "libadwaita",
+        "localsearch",
         "mutter",
+        "nautilus",
         "xdg-desktop-portal",
         "xdg-desktop-portal-gnome"
       ],
@@ -90,32 +100,62 @@
       "blurb": "What Bluefin inherits from Fedora's base image and Hummingbird has in its repository but not in its bootable base.",
       "id": "parity",
       "packages": [
+        "ModemManager",
+        "NetworkManager-bluetooth",
         "NetworkManager-config-connectivity-fedora",
+        "NetworkManager-wifi",
+        "NetworkManager-wwan",
         "abattis-cantarell-fonts",
+        "acl",
         "alsa-ucm",
+        "alsa-utils",
+        "attr",
         "bash-completion",
         "bind-utils",
+        "buildah",
+        "bzip2",
         "crypto-policies-scripts",
+        "cups",
+        "cups-client",
+        "cups-ipptool",
         "dbus-tools",
+        "default-fonts-core-emoji",
         "default-fonts-core-mono",
         "default-fonts-core-sans",
         "default-fonts-core-serif",
         "file",
+        "fprintd",
+        "fprintd-pam",
+        "glycin-thumbnailer",
         "google-noto-sans-math-fonts",
         "google-noto-sans-mono-vf-fonts",
         "google-noto-sans-symbols-2-fonts",
         "google-noto-serif-vf-fonts",
         "hostname",
         "iptables-nft",
+        "iw",
         "keyutils",
+        "krb5-workstation",
         "langpacks-en",
         "langpacks-fonts-en",
         "less",
+        "libimobiledevice-utils",
+        "lm_sensors",
         "man-db",
+        "pciutils",
+        "pipewire-utils",
+        "poppler-utils",
+        "pulseaudio-utils",
         "python3-pip",
+        "samba",
+        "samba-client",
+        "samba-common-tools",
         "systemd-container",
         "unzip",
+        "vim-enhanced",
         "which",
+        "wireless-regdb",
+        "wpa_supplicant",
         "xxd",
         "zip"
       ],
@@ -142,8 +182,11 @@
         "cryptsetup",
         "flatpak",
         "fwupd",
+        "systemd-boot-unsigned",
         "systemd-resolved",
-        "tailscale"
+        "tailscale",
+        "zram-generator",
+        "zram-generator-defaults"
       ],
       "title": "Desktop services",
       "transient": false
@@ -163,8 +206,8 @@
     }
   ],
   "totals": {
-    "installed": 106,
-    "unavailable": 10
+    "installed": 149,
+    "unavailable": 7
   },
   "unavailable": [
     {
@@ -184,7 +227,9 @@
       "name": "firefox"
     },
     {
-      "issues": [],
+      "issues": [
+        419
+      ],
       "name": "fish"
     },
     {
@@ -195,31 +240,15 @@
     },
     {
       "issues": [
-        106
+        451
       ],
-      "name": "libgda"
-    },
-    {
-      "issues": [
-        106
-      ],
-      "name": "libgda-sqlite"
-    },
-    {
-      "issues": [
-        107
-      ],
-      "name": "ppp"
+      "name": "nvtop"
     },
     {
       "issues": [
         83
       ],
       "name": "slitherer"
-    },
-    {
-      "issues": [],
-      "name": "zsh"
     }
   ]
 }

@@ -9,9 +9,17 @@ enable tailscaled.service
 enable uupd.timer
 enable ublue-system-setup.service
 enable systemd-resolved.service
+# Keep the ESP boot manager current on systemd-boot systems (#363). A drop-in
+# gates the service on a boot through systemd-boot, so GRUB and BIOS systems
+# skip it and bootupd keeps managing their grub and shim.
+enable systemd-boot-update.service
 enable bootc-unified-storage.service
 enable dconf-update.service
 enable input-remapper.service
+enable ModemManager.service
+# Printing on demand, as Fedora's preset enables it for Bluefin.
+enable cups.socket
+enable cups.path
 disable sshd.service
 # The Hummingbird base's 90-systemd.preset enables getty@.service, and its
 # kargs.d declares console=ttyS0, which is what makes systemd-getty-generator
