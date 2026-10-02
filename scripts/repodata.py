@@ -3,7 +3,7 @@
 
 A name lookup against Pages cannot verify the digest in Containerfile, library
 dependencies, or packages supplied only by the base image's RPM database. The
-availability checks therefore pull the pinned package image's repetadata and
+availability checks therefore pull the pinned package image's repository metadata and
 resolve the real install transaction against it. This module is the pull and
 unpack; the callers decide what to resolve.
 """

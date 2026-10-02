@@ -165,14 +165,8 @@ releases or emit missing-module errors with empty kernel names.
   requires a transaction summary and rejects dependency and repository errors.
 - `[unavailable]` entries still present in the install set are a validation
   error (`install-packages.py --check`).
-- An `[unavailable]` entry that becomes installable is a build failure.
-  `just check-unavailable` mounts the same pinned repository and base image as
-  `check-repos` and runs `install-packages.py --assert-unavailable`, which
-  resolves every `[unavailable]` entry with `dnf --assumeno` and fails the
-  build if any is now satisfiable. A gap is only real while the package stays
-  unavailable; an upstream release can make an entry installable without
-  touching the manifest, silently adding a package the contract never
-  intended. Needs Podman and network access.
+- An `[unavailable]` entry that becomes installable is a build failure; see the
+  `[unavailable]` rules section for how `just check-unavailable` asserts it.
 - Drift in `packages/bluefin.toml` from upstream at `packages/.bluefin-parity-ref`
   is a CI failure (`just check-parity`).
 

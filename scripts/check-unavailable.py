@@ -22,7 +22,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from repodata import pinned_inputs, repository_metadata, unpack_metadata  # noqa: E402
+from repodata import pinned_inputs, repository_metadata  # noqa: E402
 
 
 def main() -> int:
@@ -32,7 +32,7 @@ def main() -> int:
     parser.add_argument("--engine", default="podman")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
-    overlay = args.overlay or root / "packages" / "utah.toml"
+    overlay = args.overlay
     base, packages = pinned_inputs(root / "Containerfile")
     print(f"Checking [unavailable] entries against {packages} on {base}", flush=True)
     with tempfile.TemporaryDirectory(prefix="utah-unavailable-") as tmp:
