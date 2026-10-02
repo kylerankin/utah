@@ -449,7 +449,11 @@ def baseline_record(parts: dict[str, list[str]], ref: str, factory_ref: str,
     }
 
 
-def compare_to_baseline(parts: dict[str, list[str]], baseline: dict) -> list[str]:
+STALE_PREFIX = "stale baseline: "
+
+
+def compare_to_baseline(parts: dict[str, list[str]], baseline: dict, ref: str,
+                        factory_ref: str) -> list[str]:
     """Diff each partition against the recorded baseline.
 
     A name migrating between partitions is celebrated as a rebuild
@@ -462,14 +466,39 @@ def compare_to_baseline(parts: dict[str, list[str]], baseline: dict) -> list[str
     Shrinks are a no-op: a name dropping from a partition because the
     gap closed (move to [parity] / [hardware] / etc.) is the operator's
     intent, not a regression.
+
+    The baseline records the `ref` and `factory_ref` it was captured
+    against (see `baseline_record`). Those are what make the partition
+    lists comparable: two audits only describe the same package set when
+    they were read against the same Bluefin ref and factory pin. A Bluefin
+    ref or factory-pin bump that leaves the partition lists unchanged would
+    otherwise read as "no growth" and pass silently -- the baseline is
+    stale, it is not confirming the debt. Surface that mismatch first, so
+    the operator rewrites the baseline against the new ref instead of
+    trusting a verdict captured under a different one.
     """
+    msgs: list[str] = []
+
+    # A ref mismatch means the partition lists are not comparable to the
+    # baseline at all, regardless of whether they grew. Report it before
+    # the partition diff so the stale-baseline verdict is never masked by
+    # (or buried under) a growth report.
+    ref_changes = (
+        ("ref", ref, baseline.get("ref")),
+        ("factory_ref", factory_ref, baseline.get("factory_ref")),
+    )
+    for key, current, recorded in ref_changes:
+        if recorded is not None and recorded != current:
+            msgs.append(
+                f"{STALE_PREFIX}{key} changed from {recorded!r} to {current!r}"
+            )
+
     old_names_by_partition: dict[str, set[str]] = {
         partition: set(baseline.get(partition, []))
         for partition in ("hummingbird-available", "factory-built", "nowhere")
     }
     all_old = set().union(*old_names_by_partition.values())
 
-    msgs: list[str] = []
     for partition_name in ("hummingbird-available", "factory-built", "nowhere"):
         old = old_names_by_partition[partition_name]
         new = set(parts[partition_name])
@@ -605,12 +634,17 @@ def cmd_run(args) -> int:
 
 
 def cmd_check(args) -> int:
-    """Partition and fail if any partition grew past the baseline.
+    """Partition and fail on partition growth or a stale baseline.
 
-    The check is silent on a clean run (no growth); on growth it prints
-    which partitions grew, by how much, and which names. The operator then
-    either runs `--write` to commit the new debt or files the issue that
-    closed the gap in the other direction.
+    The check is silent on a clean run (no growth, baseline captured
+    against the current refs). On growth it prints which partitions grew,
+    by how much, and which names; the operator then either runs `--write`
+    to commit the new debt or files the issue that closed the gap in the
+    other direction. When the baseline was captured against a different
+    Bluefin ref or factory pin, the partition lists are not comparable at
+    all, so the failure is reported as a stale baseline and the only
+    remedy is to rewrite it with `--write` -- saying "partitions grew"
+    there would contradict the verdict, since nothing grew.
     """
     baseline = load_baseline()
     if not baseline:
@@ -619,14 +653,27 @@ def cmd_check(args) -> int:
               file=sys.stderr)
         return 2
 
-    ref, parts, *_ = fetch_partition(args)
-    growth = compare_to_baseline(parts, baseline)
-    if growth:
-        for msg in growth:
+    ref, parts, _, _, factory_ref, _ = fetch_partition(args)
+    msgs = compare_to_baseline(parts, baseline, ref, factory_ref)
+    if msgs:
+        for msg in msgs:
             print(f"ERROR: {msg}", file=sys.stderr)
-        print(f"ERROR: partitions grew past {baseline_path()}; "
-              "either fix the underlying gap or run `just audit-bluefin-parity --write` "
-              "to commit the new debt", file=sys.stderr)
+        stale = any(msg.startswith(STALE_PREFIX) for msg in msgs)
+        growth = any(not msg.startswith(STALE_PREFIX) for msg in msgs)
+        if stale and growth:
+            trailer = (f"{baseline_path()} is stale and partitions grew past it; "
+                       "fix the underlying gap or run "
+                       "`just audit-bluefin-parity --write` to re-record the "
+                       "baseline against the current refs")
+        elif stale:
+            trailer = (f"{baseline_path()} was captured against different refs; "
+                       "run `just audit-bluefin-parity --write` to re-record it "
+                       "before the gate can confirm the debt")
+        else:
+            trailer = (f"partitions grew past {baseline_path()}; "
+                       "either fix the underlying gap or run "
+                       "`just audit-bluefin-parity --write` to commit the new debt")
+        print(f"ERROR: {trailer}", file=sys.stderr)
         return 1
     return 0
 

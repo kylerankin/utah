@@ -42,11 +42,11 @@ set -xeuo pipefail
 version-script-commit <name> <scope> 1            # record success
 ```
 
-`projectbluefin/common#1196` split the old `version-script` helper in two. The
-legacy helper recorded the version *before* the body ran, so a hook that failed
-on first boot — a transient missing binary, an unreadable DMI node — was
-skipped forever after. The new pair leaves the gate read-only and lets the hook
-record success itself, so a failure retries on the next boot.
+`projectbluefin/common#1196` adds a read-only check and a separate commit while
+retaining `version-script` as the legacy check-and-record helper. The legacy
+gate records the version *before* the body runs, so a failed body is skipped
+forever after. The new pair records only successful completion and therefore
+allows failed bodies to retry on the next boot.
 
 Two consequences to keep in mind when writing the body:
 
@@ -59,9 +59,9 @@ Two consequences to keep in mind when writing the body:
 
 ## Compat shim
 
-The pinned common image has no `version-script-check`/`version-script-commit`
-until projectbluefin/common#1196 lands. Each hook therefore defines a shim so it
-works in either merge order:
+Each migrated hook defines a shim when its sourced libsetup lacks the pair,
+so a common image bump is not a merge-order prerequisite. The fallback keeps
+legacy stamp-on-check behavior; it cannot provide retry-after-body-failure.
 
 ```bash
 if ! declare -F version-script-check >/dev/null; then
@@ -70,11 +70,12 @@ if ! declare -F version-script-check >/dev/null; then
 fi
 ```
 
-As of this writing `20-home-labels.sh`, `05-bootupctl-adopt.sh` and
-`user-setup.hooks.d/30-ghostty.sh` carry the shim. The other Utah hooks
-(`10-tailscale.sh`, `11-framework-ucsi-workaround.sh`, `99-flatpaks.sh`,
-`user-setup.hooks.d/20-framework.sh`) still call the legacy `version-script`
-helper, pending #259.
+Utah's migrated privileged and user hooks carry this shim alongside their
+check/commit calls. Deliberate Framework skips (wrong vendor/product, karg
+already present) commit; unavailable DMI, missing rpm-ostree/brew and an
+unwritable Homebrew prefix remain transient. The prefix warning can recur for
+a non-admin account; that is intentional so a later permission or dependency
+change gets a retry.
 
 `30-ghostty.sh` is the case that shows why the legacy gate is not good enough
 for a body that moves files: it migrates the user's only real Ghostty config
@@ -91,10 +92,10 @@ use.
 | Hook | Purpose |
 |------|---------|
 | `05-bootupctl-adopt.sh` | Run `bootupctl adopt-and-update` on first boot so a switched-into-Utah system sees its on-disk shim and GRUB as managed by `bootupd`. Skips live sessions (`/sysroot` on `erofs`/`squashfs`) and image variants without `bootupctl` installed, both without committing so a later switch retries. Tracked by #363. |
-| `10-tailscale.sh` | Set the local user as the Tailscale operator. |
+| `10-tailscale.sh` | Set a non-root pkexec caller as the Tailscale operator. Missing Tailscale or an invalid/root caller defers without stamping; a failed grant retries with the read-only API. |
 | `11-framework-ucsi-workaround.sh` | Append the `usbcore.autosuspend=-1` karg on Intel-Core-Ultra Frameworks. |
 | `20-home-labels.sh` | Relabel `/var/home` once on systems installed before #261, repairing a mis-keyed active `file_contexts.homedirs` first (#474). |
-| `99-flatpaks.sh` | Drop the Firefox system-config defaults at first boot. |
+| `99-flatpaks.sh` | Copy optional Firefox defaults at first boot, committing after a successful copy or deliberate absence/architecture skip. A failed copy does not commit with the read-only API. |
 
 `05-bootupctl-adopt.sh` is the canonical example of a transient-skip body:
 each guard (`command -v bootupctl`, the live-session check) exits without
@@ -109,6 +110,17 @@ reinstalls the pristine copy when they disagree on the home root, and only
 then trusts a post-`restorecon` `stat` of `/var/home`.
 
 ## Tests
+
+`tests/test_first_boot.py` is collected by unittest discovery through
+`tests/run_suite.py` (`just test`, also invoked by `just check`). It exercises
+Tailscale absence/recovery, invalid and root callers, successful once-only
+grants on both libsetup contracts, and failed-grant retry with the new pair.
+Firefox's missing and present branches use actual scratch source/destination
+trees and real `/usr/bin/cp`; copy failure must leave no completion stamp.
+All fixtures register cleanup. The tests replace only filesystem roots in a
+temporary hook copy and restrict PATH, so they never write to host
+`/var/lib/flatpak`, even when the test runner itself has root privileges.
+These host tests do not prove a repeat VM boot or network/Flathub availability.
 
 `tests/test_setup_hook_version_contract.py` asserts the contract on
 `20-home-labels.sh`; `tests/test_bootupctl_adopt_hook.py` asserts the

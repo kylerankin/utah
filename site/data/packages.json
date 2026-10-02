@@ -207,7 +207,7 @@
   ],
   "totals": {
     "installed": 149,
-    "unavailable": 6
+    "unavailable": 7
   },
   "unavailable": [
     {
@@ -237,6 +237,12 @@
         253
       ],
       "name": "grub2-efi-x64-cdboot"
+    },
+    {
+      "issues": [
+        451
+      ],
+      "name": "nvtop"
     },
     {
       "issues": [

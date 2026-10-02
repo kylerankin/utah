@@ -3,7 +3,14 @@
 # shellcheck source=/dev/null
 source /usr/lib/ublue/setup-services/libsetup.sh
 
-set -euo pipefail
+# Older common images retain the legacy stamp-on-check helper. Use the
+# read-only pair when available, without requiring a common image bump first.
+if ! declare -F version-script-check >/dev/null; then
+    version-script-check() { version-script "$@"; }
+    version-script-commit() { :; }
+fi
+
+set -xeuo pipefail
 
 # Tailscale is optional on Utah. If the binary is absent (a minimal build, or
 # the package was never selected) defer setup instead of failing the first-boot
@@ -16,14 +23,20 @@ if ! command -v tailscale >/dev/null 2>&1; then
     exit 0
 fi
 
-# Without a calling UID there is no operator to grant. A missing PKEXEC_UID would
-# otherwise resolve the getent lookup to root, granting the operator role to the
-# wrong account, so defer until the hook runs from a real pkexec context.
-if [ -z "${PKEXEC_UID:-}" ] || ! getent passwd "${PKEXEC_UID}" >/dev/null 2>&1; then
+# Only a non-root pkexec caller can be the operator. Resolve the account before
+# checking the version so invalid/transient callers never burn a legacy stamp.
+if [[ ! "${PKEXEC_UID:-}" =~ ^[0-9]+$ ]] || [[ "${PKEXEC_UID}" =~ ^0+$ ]] \
+    || ! getent passwd "${PKEXEC_UID}" >/dev/null 2>&1; then
     echo "no usable calling UID; deferring tailscale privileged setup until run under pkexec"
     exit 0
 fi
+operator="$(getent passwd "${PKEXEC_UID}" | cut -d: -f1)"
+if [[ -z "${operator}" || "${operator}" == root ]]; then
+    echo "no non-root calling account; deferring tailscale privileged setup"
+    exit 0
+fi
 
-version-script tailscale privileged 1 || exit 0
+version-script-check tailscale privileged 1 || exit 0
 
-tailscale set --operator="$(getent passwd "$PKEXEC_UID" | cut -d: -f1)"
+tailscale set --operator="${operator}"
+version-script-commit tailscale privileged 1

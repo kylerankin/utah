@@ -128,7 +128,7 @@ its `metadata.json`. It runs in two modes from the same script:
   tree; this is what `just check` runs.
 - **Installed mode** — the default checks `/usr/share/gnome-shell/extensions`
   under an image root; this is what runs in the Containerfile as
-  `/usr/local/libexec/utah-verify-gnome-extensions`, right after
+  `/usr/libexec/utah-verify-gnome-extensions`, right after
   `utah-build-gnome-extensions`.
 
 Building GSConnect runs meson install. Because `desktop-file-utils` is not
@@ -281,29 +281,24 @@ The daemon (`fwupd.service`) is unaffected: it runs as root with no
 flashing still goes through the daemon, which keeps its existing root
 lifecycle. The pairing is asserted by `FwupdRefreshDropInTests` in
 `tests/test_desktop_contract.py`.
+
 ## First-boot hooks are validated at runtime
 
-The privileged-setup hooks run at first boot and had no coverage, so a hook
-invoking a missing binary or directory could fail the first boot without CI
-noticing. `tests/test_first_boot.py` exercises the real hooks against a stubbed
-`libsetup.sh` and stubbed userland (no root, no image build):
+`tests/test_first_boot.py` executes Tailscale and Firefox setup hooks against
+scratch filesystem roots. It rejects root/invalid pkexec callers, exercises
+deferred setup and retry-after-failure with the read-only libsetup API, and
+checks successful operator grants run once. The Firefox present branch must
+successfully copy real preference bytes with `/usr/bin/cp` into a scratch
+Flatpak tree; tracing an attempted copy is not successful-copy evidence.
+The absent branch must succeed without copying. See [setup-hooks.md](setup-hooks.md)
+for the versioning contract and fixture isolation.
 
-- **`10-tailscale.sh`** defers when the `tailscale` binary is absent instead of
-  failing the hook, and defers the operator grant until a real calling UID
-  (`PKEXEC_UID`) exists so it never grants the operator role to root. The
-  `version-script` stamp is idempotent, so a later tailscale install completes
-  the grant on the next boot rather than re-granting.
-- **`99-flatpaks.sh`** skips the Firefox default-preferences copy when
-  `firefox-config` is absent instead of failing on a glob that matches nothing.
-- The enablement policy is asserted in the preset and the desktop contract:
-  `bluefin-stats-refresh.timer` and `input-remapper.service` must be enabled.
-
-The tailscale hook sources `libsetup.sh` from a hardcoded absolute path, so the
-test runs a byte-for-byte copy with only that one line rewritten to a sandbox
-stub; `PATH` is the sandbox only and `bash` is invoked by absolute path, so the
-stubs fully shadow the real userland and a deliberately-absent binary is truly
-absent. This runs inside `just check` (the test module is auto-discovered), so
-the defer-and-idempotency behavior fails the build if it regresses.
+The preset and desktop contract require `bluefin-stats-refresh.timer` and
+`input-remapper.service` to be enabled. Input-remapper's enablement predates
+this first-boot fix; the new policy addition is the stats refresh timer.
+The unittest module is collected by `tests/run_suite.py`, via `just test` and
+`just check`. It is host-side hook coverage, not evidence of a real repeat
+boot or of offline/network Flatpak deployment; those require the VM harness.
 
 ## The verifiers run twice
 
@@ -319,7 +314,7 @@ or a CI artifact can be checked after the fact (recipe comment, `Justfile`,
   `localhost/utah:testing`) podman-runs both verifiers inside an
   already-composed image: the desktop verifier and the contract are
   bind-mounted from the working tree, the extension verifier runs from the
-  image's own `/usr/local/libexec`.
+  image's own `/usr/libexec`.
 - **Off-image** — `verify-desktop-contract.py --check` validates the contract
   TOML itself in source-only CI and is part of `just check`; it asserts
   nothing about any image.
