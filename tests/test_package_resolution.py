@@ -440,7 +440,6 @@ class UnavailableContractTests(unittest.TestCase):
                          f"[unavailable] entries still installed: {overlap}")
 
 
-
 class ParityContractTests(unittest.TestCase):
     MANIFEST = ROOT / "packages/bluefin.toml"
     OVERLAY = ROOT / "packages/utah.toml"

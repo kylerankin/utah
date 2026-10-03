@@ -365,7 +365,6 @@ def main() -> int:
 
     dnf = dnf_path()
     major = fedora_major()
-
     packages = contract(args.manifest, overlay, major)
     build_deps = section(overlay, "build")
     excluded = section(args.manifest, "excluded")

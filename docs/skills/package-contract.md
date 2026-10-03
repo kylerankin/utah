@@ -89,8 +89,7 @@ absence, and 2 for a repository failure, unexpected exit or missing
 transaction evidence. The outer gate rejects verdict 2 and missing verdicts
 rather than recording a broken repository as a real parity gap. Only the
 container engine's exit 125 is retried by the recipe; package failures are
-not transient by assumption. No separate `--assert-unavailable` API or
-second metadata-reader helper is needed.
+not transient by assumption.
 
 ## multimedia_overrides are not missing packages
 
