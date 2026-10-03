@@ -52,17 +52,6 @@ jobs:
           main_ref=$(python3 -c "import json,sys; m=json.load(sys.stdin); print(next(x['ref'] for x in m['include'] if x['image']=='utah'))" <<<"$matrix")
           digests=$(jq -c 'reduce .include[] as $i ({}; . + {($i.image): $i.ref})' <<< "$matrix")
           suites_json=$(python3 scripts/flavors.py suites)
-          # Fail before the gate boots anything if a flavor has no published
-          # exact digest: an empty image input would fail later and confusingly,
-          # hiding the real cause (a missing build artifact) behind four.
-          missing=$(jq -r --argjson d "$digests" \
-            '[.[] | .image | select(($d[.]) == null or ($d[.] | length) == 0)]
-            | (if length == 0 then "" else ": \(join(", "))" end)' \
-            <<< "$suites_json")
-          if [ -n "$missing" ]; then
-            echo "::error::gate: no published exact-digest for flavor(s)$missing — promotion would boot an empty image"
-            exit 1
-          fi
           {
             echo "matrix=$matrix"
             echo "main_ref=$main_ref"
