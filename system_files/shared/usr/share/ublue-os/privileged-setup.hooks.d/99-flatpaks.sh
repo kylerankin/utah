@@ -3,7 +3,10 @@
 # shellcheck source=/dev/null
 source /usr/lib/ublue/setup-services/libsetup.sh
 
-version-script flatpaks privileged 1 || exit 0
+# Bumped to 2 for #489: machines that ran version 1 recorded success while the
+# quoted glob made `rm -f` a no-op, so stale *bluefin*.js prefs survived. The
+# body is idempotent (mkdir -p / rm -f / cp -rf), so re-running it is safe.
+version-script flatpaks privileged 2 || exit 0
 
 set -x
 

@@ -8,7 +8,9 @@ matched a *literal* filename that never existed and left stale prefs behind.
 
 Moving the glob outside the quotes changes behaviour (#489): `rm` now actually
 deletes the stale `*bluefin*.js` prefs the quoted form never matched. These
-tests lock the glob outside the quotes so the bug cannot silently return.
+tests lock the glob outside the quotes so the bug cannot silently return, and
+pin the hook version at 2 so already-provisioned machines re-run the repaired
+`rm -f` instead of keeping the prefs version 1 failed to clear.
 """
 import shutil
 import subprocess
@@ -48,6 +50,13 @@ class FlatpaksHookGlobTests(unittest.TestCase):
             self.body,
             "a glob trapped inside double quotes never expands",
         )
+
+    def test_version_was_bumped_past_the_no_op_rm(self):
+        # #489: hosts that ran the version-1 hook recorded success while the
+        # quoted glob made `rm -f` match a literal filename, so stale prefs
+        # survived. Without a bump the repaired rm never re-runs there.
+        self.assertNotIn("flatpaks privileged 1", self.body)
+        self.assertIn("version-script flatpaks privileged 2 || exit 0", self.body)
 
     def test_arch_variable_still_quoted(self):
         # The $ARCH expansion is brace-quoted on every use (mkdir/rm/cp), so a
