@@ -365,7 +365,16 @@ def builder_only_repo_files(repos_dir: Path) -> set[Path]:
     stages: list[set[Path]] = []
     text = containerfile.read_text(encoding="utf-8").replace("\\\n", " ")
     for line in text.splitlines():
-        words = shlex.split(line, comments=True)
+        try:
+            words = shlex.split(line, comments=True)
+        except ValueError:
+            # Unbalanced quote (e.g. a stray apostrophe): report and skip the
+            # line so `just check` fails with a policy note, not a traceback.
+            print(
+                f"builder_only_repo_files: skipping unbalanced line: {line!r}",
+                file=sys.stderr,
+            )
+            continue
         if not words:
             continue
         if words[0].upper() == "FROM":
@@ -673,12 +682,9 @@ def main() -> int:
     )
     if args.check:
         assert len(set(expected)) == len(expected), "RPM contract contains duplicate package names"
-        for pkg in factory_packages:
-            assert pkg in gnome, f"Factory package '{pkg}' is not declared in the [gnome] section"
-        for pkg in factory_parity:
-            assert pkg in parity, (
-                f"Factory parity package '{pkg}' is not declared in the [parity] section"
-            )
+        # Factory membership is asserted unconditionally above (lines ~644-652),
+        # which also covers the on-image invocation; re-asserting here would be
+        # a duplicate. See #452 (review, style, low).
         # A [gnome.versions] key that names no [gnome] package asserts nothing:
         # verify_gnome_contract looks versions up by package name, so a typo
         # would silently drop that package's major-version claim on-image.
