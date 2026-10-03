@@ -345,6 +345,9 @@ build-ghcr base_name stream flavor kernel_pin="":
     # for non-PR events -- so pulling either would 401 on exactly the runs that
     # need them most.  It passes GITHUB_TOKEN through to this recipe, so use it.
     if [ -n "${GITHUB_TOKEN:-}" ]; then
+      auth_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/utah-registry.XXXXXX")"
+      trap 'rm -rf "$auth_dir"' EXIT
+      export DOCKER_CONFIG="$auth_dir" REGISTRY_AUTH_FILE="$auth_dir/config.json"
       echo "${GITHUB_TOKEN}" | podman login ghcr.io -u "${GITHUB_ACTOR:-x}" --password-stdin
     fi
     # main builds neither the OGC kernel nor an NVIDIA module, so it keeps the
@@ -355,6 +358,32 @@ build-ghcr base_name stream flavor kernel_pin="":
     if [ "{{ flavor }}" != main ]; then
       cache_ref="$(./scripts/kernel-cache-tag.sh)"
       cache_ref="ghcr.io/{{ repo_organization }}/{{ kernel_cache_image }}:${cache_ref}"
+      # Verify immutable bytes, never a mutable tag that FROM can re-resolve.
+      # The reusable builder runs this via sudo, whose secure_path drops tools
+      # installed through GITHUB_PATH. Bootstrap a checksummed binary outside
+      # the context in CI and invoke it by absolute path; local builds require it.
+      cosign_bin="$(command -v cosign || true)"
+      if [ "${GITHUB_ACTIONS:-false}" = true ]; then
+        case "$(uname -m)" in
+          x86_64) cosign_arch=amd64; cosign_sha=783b5d6c74105401c63946c68d9b2a4e1aab3c8abce043e06b8510b02b623ec9 ;;
+          aarch64) cosign_arch=arm64; cosign_sha=bffabe4cf183122b7de3111257a863c99e7dc6cf1093bfd7bf961de1795589b8 ;;
+          *) echo "Unsupported cosign architecture" >&2; exit 1 ;;
+        esac
+        cosign_bin="${RUNNER_TEMP:?}/utah-tools/cosign"
+        mkdir -p "${cosign_bin%/*}"
+        curl -fsSL "https://github.com/sigstore/cosign/releases/download/v2.5.3/cosign-linux-${cosign_arch}" -o "$cosign_bin"
+        echo "${cosign_sha}  ${cosign_bin}" | sha256sum --check --strict
+        chmod 0755 "$cosign_bin"
+      fi
+      if [ -z "$cosign_bin" ]; then
+        echo "cosign is required to verify the kernel cache before building" >&2
+        exit 1
+      fi
+      digest="$(skopeo inspect "docker://${cache_ref}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["Digest"])')"
+      cache_ref="${cache_ref%:*}@${digest}"
+      "$cosign_bin" verify "$cache_ref" \
+        --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+        --certificate-identity-regexp '^https://github\.com/projectbluefin/utah/\.github/workflows/build\.yml@refs/(heads/[^@]+|pull/[0-9]+/merge)$'
       base_args=(--build-arg BASE_IMAGE="$cache_ref")
     fi
     # Registry layer cache, the same arrangement Bluefin uses.  The package

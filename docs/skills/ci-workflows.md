@@ -101,17 +101,53 @@ loudly there, because an invalid matrix creates no image job at all and the
 only symptom is `build_container: failure` from the aggregator (comment,
 `.github/workflows/build.yml`).
 
-## kernel_cache: skipped unless needed, skipped when published
+## kernel_cache: skipped unless needed, reused only when signed
 
 The kernel cache job runs only when `needs_kernel` is `true` -- while the
 matrix is main-only, building it is 45 minutes spent on an image nothing
 consumes (comment, `.github/workflows/build.yml`). When it does run, it
 frees runner disk, logs in to GHCR with `GITHUB_TOKEN`, and probes the
-content-hash tag with `podman pull`: a tag that is already published is a
-cache hit and the job exits without building; only a miss builds
-`Containerfile.kernel` and pushes (step "Build the kernel cache image if it
-is not published yet", `.github/workflows/build.yml`). What the tag hashes
+content-hash tag with `podman pull`. A published tag is a cache hit only if
+its digest verifies; unsigned or wrongly signed hits are rebuilt from the
+checkout, pushed, signed and verified just like misses. What the tag hashes
 and why lives in [kernel-cache.md](kernel-cache.md).
+
+A published tag is adopted only when its signature verifies; a miss is
+pushed, signed, and verified before the job calls itself done. Two
+boundaries decide whether that can work (job `env:` and the same step):
+
+- podman and cosign must share one credential store. `podman login` by
+  default writes `${XDG_RUNTIME_DIR}/containers/auth.json`, which cosign
+  never reads -- it uses the Docker keychain at
+  `${DOCKER_CONFIG}/config.json`. The job points both `DOCKER_CONFIG` and
+  `REGISTRY_AUTH_FILE` at one `${RUNNER_TEMP}/utah-registry/config.json`,
+  outside the image build context, and removes it in an always-run step.
+  The image push and signature upload then authenticate with the same token;
+  without it the push succeeds and `cosign sign` fails UNAUTHORIZED (#316).
+- the signed digest must be the one the registry stored. After a push,
+  `podman image inspect ... RepoDigests` reports the *local* manifest
+  digest, which differs from the registry's, so the job signs the digest
+  `podman push --digestfile` reports instead. The cache-hit path needs no
+  such care: there the inspect runs after `podman pull`, which records the
+  registry digest.
+
+`cosign verify` pins the issuer and the identity to this exact workflow in
+this repo, then accepts any `refs/heads/*` or `refs/pull/N/merge` ref. A
+manual `workflow_dispatch` signs with `refs/heads/<branch>` -- and the
+Actions UI defaults to the default branch -- so a regexp naming only
+`testing` made a dispatched run sign the image and then fail its own
+verify. Everyone who can dispatch this workflow can already sign from an
+arbitrary branch via a same-repo pull request, so accepting branch heads
+widens nothing (#316).
+
+The consumer (`build-ghcr`) also fails closed: CI downloads cosign v2.5.3
+with the platform SHA-256 pinned by `sigstore/cosign-installer@d58896d6…`,
+outside the context under `${RUNNER_TEMP}/utah-tools`, and invokes its absolute
+path because the reusable builder uses `sudo` with `secure_path`. Local kernel
+builds require cosign on PATH. The tag is resolved once through `skopeo`, the
+same issuer/ref regexp verifies the resulting immutable digest, and only that
+digest reaches `BASE_IMAGE`. Registry credentials use a private temporary
+Docker keychain outside the checkout and are removed at recipe exit.
 
 ## The build matrix calls reusable-build.yml twice
 

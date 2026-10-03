@@ -56,6 +56,10 @@ Two consequences to keep in mind when writing the body:
    (wrong vendor, karg already applied) commits before `exit 0` so the hook
    stops re-running every boot. A transient skip (DMI unreadable, dependency
    missing) exits *without* committing so it retries.
+3. **Evaluate transient guards before `version-script-check`.** Under the compat
+   shim the check *is* the legacy stamp, so a transient skip placed after it is
+   recorded as done and never retries. Deliberate skips stay after the check,
+   since they need the gate to have run before committing.
 
 ## Compat shim
 
@@ -93,7 +97,7 @@ use.
 |------|---------|
 | `05-bootupctl-adopt.sh` | Run `bootupctl adopt-and-update` on first boot so a switched-into-Utah system sees its on-disk shim and GRUB as managed by `bootupd`. Skips live sessions (`/sysroot` on `erofs`/`squashfs`) and image variants without `bootupctl` installed, both without committing so a later switch retries. Tracked by #363. |
 | `10-tailscale.sh` | Set a non-root pkexec caller as the Tailscale operator. Missing Tailscale or an invalid/root caller defers without stamping; a failed grant retries with the read-only API. |
-| `11-framework-ucsi-workaround.sh` | Append the `usbcore.autosuspend=-1` karg on Intel-Core-Ultra Frameworks. |
+| `11-framework-ucsi-workaround.sh` | Append the `usbcore.autosuspend=-1` karg on Intel-Core-Ultra Frameworks. Wrong hardware or an already-applied karg commits a deliberate skip; missing DMI or rpm-ostree retries. |
 | `20-home-labels.sh` | Relabel `/var/home` once on systems installed before #261, repairing a mis-keyed active `file_contexts.homedirs` first (#474). |
 | `99-flatpaks.sh` | Copy optional Firefox defaults at first boot, committing after a successful copy or deliberate absence/architecture skip. A failed copy does not commit with the read-only API. |
 
@@ -138,3 +142,9 @@ and both paths symlinked at one. Run the suite with `just test`.
 `just check` syntax-checks every hook (`bash -n`) through
 `scripts/check-script-syntax.py`; there is no shellcheck gate in the Justfile
 or CI.
+
+`tests/test_migrated_setup_hook_contract.py` executes all four migrated hooks
+against both library contracts using scratch filesystem roots. It proves
+successful bodies run once, body failures retry with the new pair, Framework
+deliberate skips stamp and transient skips recover. It uses real Firefox copy
+operations against scratch destinations, never host `/var/lib/flatpak`.
