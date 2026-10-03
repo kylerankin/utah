@@ -136,6 +136,13 @@ This covers all three: a repo file the base ships in `/etc/distro.repos.d` or
 `/etc/yum.repos.d`, so scanning only the first would leave it invisible to the
 gate (issue #513).
 
+It also scans dnf5's two repo-override drop-in dirs — `/etc/dnf/repos.override.d`
+and `/usr/share/dnf5/repos.override.d` (issue #524). dnf5 applies overrides from
+there, so a `.repo` file can flip `enabled=`/`baseurl=` on a repo id defined in
+the scanned dirs; a base-image override that re-enables a repo the gate saw
+disabled is gated the same way. A repo the base ships in an override dir is
+subject to the allowlist exactly as one in a `reposdir`.
+
 ## Printing and scanning gaps
 
 CUPS and its driverless IPP support do not supply the full printing/scanning

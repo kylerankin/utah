@@ -60,10 +60,17 @@ FACTORY_REPO_PATH = "/etc/yum.repos.d/utah-packages.repo"
 # dnf5 loads every one of these when it resolves packages, so scanning only
 # /etc/yum.repos.d left a repo file the base ships in another default reposdir
 # enabled at runtime yet invisible to the gate (#513).
+# dnf5 also reads repo-override drop-ins from two override directories: a
+# system override (/etc/dnf/repos.override.d) and a distribution override
+# (/usr/share/dnf5/repos.override.d). A .repo file there can set enabled=/baseurl=
+# on a repo id defined in the scanned dirs, so a base-image override could
+# re-enable a repo the gate observed as disabled. Scan those too (#524).
 RUNTIME_REPOS_DIRS: tuple[Path, ...] = (
     Path("/etc/yum.repos.d"),
     Path("/etc/distro.repos.d"),
     Path("/usr/share/dnf5/repos.d"),
+    Path("/etc/dnf/repos.override.d"),
+    Path("/usr/share/dnf5/repos.override.d"),
 )
 FACTORY_PIN_RE = re.compile(r"^# factory-pin: (?P<digest>\S+)\s*$", re.MULTILINE)
 
@@ -760,7 +767,9 @@ def main() -> int:
     # stage). Scan every dnf5 default reposdir (#513): a repo file the base ships
     # in /etc/distro.repos.d or /usr/share/dnf5/repos.d is enabled at runtime
     # just as one in /etc/yum.repos.d, so scanning only the first would leave it
-    # invisible to the allowlist.
+    # invisible to the allowlist. Also scan dnf5's two repo-override drop-in dirs
+    # (#524): a .repo file there can flip enabled=/baseurl= on a repo id the gate
+    # saw disabled, so an override that re-enables one is gated the same way.
     repo_errors: list[str] = []
     for repos_dir in RUNTIME_REPOS_DIRS:
         repo_errors.extend(

@@ -1182,7 +1182,7 @@ class SupplyChainTests(unittest.TestCase):
 
 
 class OnImageRepoAllowlistTests(unittest.TestCase):
-    """The on-image run scans dnf5's default reposdir paths (#454, #513).
+    """The on-image run scans dnf5's default reposdir paths and override dirs (#454, #513, #524).
 
     `--check` already enforces the repository allowlist against the source
     repo files in `packages/`. The Hummingbird base image ships its own repo
@@ -1191,7 +1191,9 @@ class OnImageRepoAllowlistTests(unittest.TestCase):
     runtime repo set passes, an enabled Fedora or unapproved repo fails, a
     disabled repo is skipped, and a repo the base ships in a default reposdir
     other than /etc/yum.repos.d (that is, /etc/distro.repos.d or
-    /usr/share/dnf5/repos.d) is gated just the same (#513).
+    /usr/share/dnf5/repos.d) is gated just the same (#513). A repo the base
+    ships in dnf5's two repo-override drop-in dirs, or one it re-enables there
+    that the reposdir scan saw disabled, is gated the same way (#524).
     """
 
     def setUp(self) -> None:
@@ -1424,6 +1426,128 @@ class OnImageRepoAllowlistTests(unittest.TestCase):
             code, out, err = self.run_main(
                 manifest, overlay, {"bash", "gnome-shell"},
                 [yum_repos, distro_repos, system_repos],
+            )
+        self.assertEqual(code, 0, err)
+        self.assertIn("All 2 contract packages are present.", out)
+
+    def test_a_fedora_repo_in_the_system_override_dir_fails(self) -> None:
+        """A repo override the base places in /etc/dnf/repos.override.d is gated (#524).
+
+        dnf5 applies repo overrides from /etc/dnf/repos.override.d, so a .repo
+        file there is live at runtime even though /etc/yum.repos.d is clean. The
+        on-image run scans the override dir, so a Fedora repo there fails.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(directory, gnome=["gnome-shell"])
+            yum_repos = directory / "yum.repos.d"
+            system_override = directory / "dnf-repos-override.d"
+            write_repo_file(
+                yum_repos, "public-hummingbird-x86_64-rpms",
+                baseurl="https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+            )
+            write_repo_file(
+                system_override, "fedora-rawhide",
+                baseurl="https://dl.fedoraproject.org/pub/fedora/linux/development/rawhide/$basearch/os/",
+            )
+            code, _, err = self.run_main(
+                manifest, overlay, {"bash", "gnome-shell"},
+                [yum_repos, system_override],
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("Fedora repository 'fedora-rawhide' is enabled", err)
+        self.assertIn("fedora-rawhide.repo", err)
+
+    def test_an_unapproved_repo_in_the_distribution_override_dir_fails(self) -> None:
+        """An unapproved repo override under /usr/share/dnf5/repos.override.d is gated (#524).
+
+        /usr/share/dnf5/repos.override.d is dnf5's distribution override dir, so a
+        repo enabled there is live at runtime. The scan covers it, so an
+        unapproved id fails even though /etc/yum.repos.d is clean.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(directory, gnome=["gnome-shell"])
+            yum_repos = directory / "yum.repos.d"
+            distrib_override = directory / "share-dnf5-repos-override.d"
+            write_repo_file(
+                yum_repos, "public-hummingbird-x86_64-rpms",
+                baseurl="https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+            )
+            write_repo_file(
+                distrib_override, "third-party",
+                baseurl="https://third-party.example.com/$basearch",
+            )
+            code, _, err = self.run_main(
+                manifest, overlay, {"bash", "gnome-shell"},
+                [yum_repos, distrib_override],
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("Unapproved repository 'third-party' is enabled", err)
+
+    def test_a_fedora_repo_reenabled_by_an_override_fails(self) -> None:
+        """An override that re-enables a repo the gate saw disabled fails (#524).
+
+        This is the exact #524 gap: /etc/yum.repos.d ships a Fedora repo with
+        enabled=0, which the scan skips, but /etc/dnf/repos.override.d sets
+        enabled=1 on the same id, so it is live at runtime. Scanning the override
+        dir catches the re-enabled Fedora repo that the reposdir scan missed.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(directory, gnome=["gnome-shell"])
+            yum_repos = directory / "yum.repos.d"
+            system_override = directory / "dnf-repos-override.d"
+            write_repo_file(
+                yum_repos, "fedora-rawhide",
+                baseurl="https://dl.fedoraproject.org/pub/fedora/linux/development/rawhide/$basearch/os/",
+                enabled="0",
+            )
+            write_repo_file(
+                system_override, "fedora-rawhide",
+                baseurl="https://dl.fedoraproject.org/pub/fedora/linux/development/rawhide/$basearch/os/",
+                enabled="1",
+            )
+            code, _, err = self.run_main(
+                manifest, overlay, {"bash", "gnome-shell"},
+                [yum_repos, system_override],
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("Fedora repository 'fedora-rawhide' is enabled", err)
+        self.assertIn("fedora-rawhide.repo", err)
+
+    def test_a_clean_repo_set_across_the_override_dirs_passes(self) -> None:
+        """Allowlisted repos in both override dirs pass (#524)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(
+                directory,
+                gnome=["gnome-shell"],
+                repositories=["public-hummingbird-x86_64-rpms", "utah-packages"],
+                baseurls={
+                    "public-hummingbird-x86_64-rpms":
+                        "https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+                    "utah-packages": "file:///etc/utah-packages",
+                },
+            )
+            yum_repos = directory / "yum.repos.d"
+            system_override = directory / "dnf-repos-override.d"
+            distrib_override = directory / "share-dnf5-repos-override.d"
+            write_repo_file(
+                yum_repos, "public-hummingbird-x86_64-rpms",
+                baseurl="https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+            )
+            write_repo_file(
+                system_override, "utah-packages",
+                baseurl="file:///etc/utah-packages",
+            )
+            code, out, err = self.run_main(
+                manifest, overlay, {"bash", "gnome-shell"},
+                [yum_repos, system_override, distrib_override],
             )
         self.assertEqual(code, 0, err)
         self.assertIn("All 2 contract packages are present.", out)
