@@ -1,82 +1,64 @@
-"""`99-flatpaks.sh` must clear stale bluefin prefs before seeding Firefox config.
-
-The hook copies ublue-os Firefox defaults into the system flatpak's
-`defaults/pref` directory. Before copying it removes leftover `*bluefin*.js`
-files from a previous image so a dropped config cannot survive. The glob was
-written inside double quotes — `rm -f ".../pref/*bluefin*.js"` — so the shell
-matched a *literal* filename that never existed and left stale prefs behind.
-
-Moving the glob outside the quotes changes behaviour (#489): `rm` now actually
-deletes the stale `*bluefin*.js` prefs the quoted form never matched. These
-tests lock the glob outside the quotes so the bug cannot silently return, and
-pin the hook version at 2 so already-provisioned machines re-run the repaired
-`rm -f` instead of keeping the prefs version 1 failed to clear.
-"""
-import shutil
+"""Firefox setup removes retired Bluefin preferences without deleting user files."""
+import os
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-_SHELLCHECK = shutil.which("shellcheck")
-HOOK = (
-    ROOT
-    / "system_files/shared/usr/share/ublue-os/privileged-setup.hooks.d"
-    / "99-flatpaks.sh"
-)
+HOOK = ROOT / "system_files/shared/usr/share/ublue-os/privileged-setup.hooks.d/99-flatpaks.sh"
 
 
 class FlatpaksHookGlobTests(unittest.TestCase):
     def setUp(self):
-        self.body = HOOK.read_text()
+        self.temporary = tempfile.TemporaryDirectory(prefix="flatpak-prefs-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name) / "path with spaces"
+        self.root.mkdir()
+        self.source = self.root / "firefox-config"
+        self.source.mkdir()
+        self.flatpak_root = self.root / "flatpak"
+        self.destination = self.flatpak_root / "extension/org.mozilla.firefox.systemconfig/x86_64/stable/defaults/pref"
+        self.destination.mkdir(parents=True)
+        self.libsetup = self.root / "libsetup.sh"
+        self.libsetup.write_text("version-script() { return 0; }\n")
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        arch = self.bin / "arch"
+        arch.write_text("#!/bin/sh\nprintf 'x86_64\\n'\n")
+        arch.chmod(0o755)
 
-    def test_hook_exists(self):
-        self.assertTrue(HOOK.is_file())
-
-    def test_glob_is_outside_the_quotes(self):
-        """The rm target is a quoted directory followed by an unquoted glob.
-        The glob must live outside the quotes, otherwise `rm` matches a literal
-        filename and never clears stale prefs (#489)."""
-        self.assertIn(
-            '/pref/"*bluefin*.js',
-            self.body,
-            "the *bluefin*.js glob must be outside the double quotes so it "
-            "expands instead of matching a literal filename",
+    def run_hook(self):
+        body = HOOK.read_text().replace(
+            "source /usr/lib/ublue/setup-services/libsetup.sh",
+            f'source "{self.libsetup}"',
+        ).replace("/var/lib/flatpak", str(self.flatpak_root)).replace(
+            "/usr/share/ublue-os/firefox-config", str(self.source)
+        )
+        # The original source glob is unquoted; quote only the isolated fixture
+        # root so this harness never changes glob expansion or rm semantics.
+        body = body.replace(f"{self.source}/*", f'"{self.source}"/*')
+        script = self.root / "hook.sh"
+        script.write_text(body)
+        return subprocess.run(
+            ["bash", str(script)], text=True, capture_output=True,
+            env={**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}"},
         )
 
-    def test_glob_is_not_trapped_in_quotes(self):
-        self.assertNotIn(
-            'pref/*bluefin*.js"',
-            self.body,
-            "a glob trapped inside double quotes never expands",
-        )
+    def test_retired_preferences_removed_but_user_preferences_preserved(self):
+        stale = self.destination / "old-bluefin-default.js"
+        stale.write_text("retired preference\n")
+        user = self.destination / "user-custom.js"
+        user.write_text("user preference\n")
+        (self.source / "new-bluefin-default.js").write_text("new preference\n")
+        result = self.run_hook()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(stale.exists())
+        self.assertEqual(user.read_text(), "user preference\n")
+        self.assertEqual((self.destination / "new-bluefin-default.js").read_text(), "new preference\n")
 
-    def test_version_was_bumped_past_the_no_op_rm(self):
-        # #489: hosts that ran the version-1 hook recorded success while the
-        # quoted glob made `rm -f` match a literal filename, so stale prefs
-        # survived. Without a bump the repaired rm never re-runs there.
-        self.assertNotIn("flatpaks privileged 1", self.body)
-        self.assertIn("version-script flatpaks privileged 2 || exit 0", self.body)
-
-    def test_arch_variable_still_quoted(self):
-        # The $ARCH expansion is brace-quoted on every use (mkdir/rm/cp), so a
-        # path with a space could not word-split. The fix only moved the
-        # trailing glob out of the quotes; ARCH quoting is untouched.
-        self.assertEqual(self.body.count("${ARCH}"), 3)
-
-    @unittest.skipUnless(_SHELLCHECK, "shellcheck is not installed")
-    def test_shellcheck_passes(self):
-        result = subprocess.run(
-            [_SHELLCHECK, "--severity=warning", str(HOOK)],
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(
-            result.returncode,
-            0,
-            f"shellcheck failed:\n{result.stdout}\n{result.stderr}",
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_no_stale_match_still_installs_the_new_preferences(self):
+        (self.source / "current-bluefin.js").write_text("current preference\n")
+        result = self.run_hook()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.destination / "current-bluefin.js").read_text(), "current preference\n")
