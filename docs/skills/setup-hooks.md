@@ -120,7 +120,12 @@ transitions (fresh install, re-run after commit, live session, missing
 fresh, migrate, already-symlinked and reverse-symlink (`~/.config/ghostty`
 pointing into the per-app dir) transitions, plus the two user-managed layouts
 the hook must not disturb: the per-app path symlinked at a dotfiles directory,
-and both paths symlinked at one. Run the suite with `just test`.
+and both paths symlinked at one. `tests/test_flatpaks_hook.py` pins the
+`*bluefin*.js` glob in `99-flatpaks.sh` outside the quoted `rm` target (#489)
+and the hook version at 2 so machines that recorded success under the no-op
+`rm` re-run the repaired body. Run the suite with `just test`.
 `just check` syntax-checks every hook (`bash -n`) through
-`scripts/check-script-syntax.py`; there is no shellcheck gate in the Justfile
-or CI.
+`scripts/check-script-syntax.py`; there is no repository-wide shellcheck gate
+in the Justfile or CI, only the per-hook `shellcheck --severity=warning`
+assertion in `tests/test_flatpaks_hook.py`, which skips when the binary is
+absent.
