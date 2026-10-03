@@ -72,6 +72,13 @@ RUNTIME_REPOS_DIRS: tuple[Path, ...] = (
     Path("/etc/dnf/repos.override.d"),
     Path("/usr/share/dnf5/repos.override.d"),
 )
+# dnf5 lets an override drop-in set only part of a repo id (e.g. enabled=/
+# priority= with no baseurl=), but this gate reads each .repo file with
+# full-file semantics, so an allowlisted id overridden in a drop-in dir with no
+# baseurl= fails with "declares no baseurl". That is fail-closed on purpose: a
+# partial override of an allowlisted id is not a complete, verifiable pin, and
+# silently accepting it would let a repo the gate saw as absent appear at
+# runtime. Reject it (#524) rather than downgrade the gate to best-effort.
 FACTORY_PIN_RE = re.compile(r"^# factory-pin: (?P<digest>\S+)\s*$", re.MULTILINE)
 
 DISABLED_VALUES: frozenset[str] = frozenset({"0", "false", "no", "off"})
