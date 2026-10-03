@@ -157,6 +157,19 @@ def dnf_path() -> str:
 RESOLVE_ERRORS = (r"No match for argument|nothing provides|conflicting requests|cannot install both|Error:|Failed to|"
                   r"Argument '[^'\n]+' matches only excluded packages\.")
 RESOLVE_SUMMARY = r"(?m)^Transaction Summary:?\s*$|^Nothing to do\.?\s*$"
+# A genuine absence: dnf read the repositories and the package or one of its
+# dependencies is not in them. Keep these alternatives in step with
+# RESOLVE_ERRORS above.
+RESOLVE_ABSENT = (r"No match for argument|Unable to find a match|nothing provides|"
+                  r"conflicting requests|cannot install both|"
+                  r"none of the providers can be installed|cannot install the best candidate|"
+                  r"Argument '[^'\n]+' matches only excluded packages\.")
+# A repository failure: dnf never got a usable view of the repositories, so an
+# absence line printed beside it says nothing about the package.
+RESOLVE_REPO_FAILURE = (r"Failed to download metadata|Failed to load repository|"
+                        r"Failed to synchronize cache|Ignoring repositories|Cannot download|Curl error|"
+                        r"Errors during downloading metadata|repo .* not found|"
+                        r"No repositories available")
 
 
 def dnf_assumeno(dnf: str, repos: tuple[str, ...], packages: list[str]) -> subprocess.CompletedProcess:
@@ -331,19 +344,14 @@ def main() -> int:
         # what the gate parses.
         result = dnf_assumeno(dnf_path(), repos, [args.resolve_one])
         print(result.stdout, end="", flush=True)
-        if re.search(r"Failed to download metadata|Failed to load repository|"
-                       r"Cannot download repomd\.xml|Errors during downloading metadata|Curl error",
-                       result.stdout, re.IGNORECASE):
-            # A known absence must not mask a broken repository in the same log.
+        if re.search(RESOLVE_REPO_FAILURE, result.stdout, re.IGNORECASE):
+            # A broken repository beside an absence line or summary is still
+            # a broken repository; neither establishes package availability.
             verdict = 2
         elif transaction_resolves(result):
             verdict = 0
         elif result.returncode in (0, 1) and re.search(
-                r"No match for argument|Unable to find a match|nothing provides|"
-                r"conflicting requests|cannot install both|"
-                r"none of the providers can be installed|cannot install the best candidate|"
-                r"Argument '[^'\n]+' matches only excluded packages\.",
-                result.stdout, re.IGNORECASE):
+                RESOLVE_ABSENT, result.stdout, re.IGNORECASE):
             verdict = 1
         else:
             # A repository failure or unexplained decline is not evidence that
@@ -372,7 +380,6 @@ def main() -> int:
 
     dnf = dnf_path()
     major = fedora_major()
-
     packages = contract(args.manifest, overlay, major)
     build_deps = section(overlay, "build")
     excluded = section(args.manifest, "excluded")

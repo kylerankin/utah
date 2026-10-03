@@ -367,7 +367,11 @@ class ResolveOneTests(unittest.TestCase):
                                  "Argument 'candidate' matches only excluded packages.\n"),
                              (1, "Cannot download repomd.xml\nTransaction Summary:\n"),
                              (1, "Curl error (6): could not resolve host\nTransaction Summary:\n"),
-                             (2, "Argument 'candidate' matches only excluded packages.\n")):
+                             (2, "Argument 'candidate' matches only excluded packages.\n"),
+                             (1, "Ignoring repositories: fedora\n"
+                                 "No match for argument: candidate\n"),
+                             (1, "Error: Failed to download metadata for repo 'fedora'\n"
+                                 "No match for argument: candidate\n")):
             with self.subTest(code=code, output=output):
                 rc, _, log = self.probe(output, code=code)
                 self.assertEqual(rc, 2)
@@ -460,7 +464,6 @@ class UnavailableContractTests(unittest.TestCase):
         overlap = sorted(set(self.names()) & install)
         self.assertEqual(overlap, [],
                          f"[unavailable] entries still installed: {overlap}")
-
 
 
 class ParityContractTests(unittest.TestCase):
