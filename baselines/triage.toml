@@ -1025,6 +1025,17 @@ status = "untriaged"
 [package.avahi-tools]
 status = "untriaged"
 
+[package.nss-mdns]
+status = "unavailable"
+area = "network-fs"
+reason = "packages/utah.toml [unavailable]"
+issue = "#499"
+# .local name resolution over mDNS (Name Service Switch module). Image-level
+# parity gap: Bluefin ships it, Hummingbird's repository and the utah-packages
+# factory do not, so no repository Utah enables supplies it. Distinct from
+# avahi, which this triages as untriaged; enabling avahi-daemon does not bring
+# .local resolution. See packages/utah.toml [unavailable].
+
 [package.b43-fwcutter]
 status = "untriaged"
 
