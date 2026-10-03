@@ -35,9 +35,6 @@ class FlatpaksHookGlobTests(unittest.TestCase):
         ).replace("/var/lib/flatpak", str(self.flatpak_root)).replace(
             "/usr/share/ublue-os/firefox-config", str(self.source)
         )
-        # The original source glob is unquoted; quote only the isolated fixture
-        # root so this harness never changes glob expansion or rm semantics.
-        body = body.replace(f"{self.source}/*", f'"{self.source}"/*')
         script = self.root / "hook.sh"
         script.write_text(body)
         return subprocess.run(
