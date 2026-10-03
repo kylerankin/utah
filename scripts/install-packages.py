@@ -154,7 +154,8 @@ def dnf_path() -> str:
 # package". A missing package or dependency must never be accepted as the
 # declined case: the error patterns fail the verdict even beside a summary,
 # and a verdict without a summary or an "already installed" line is not one.
-RESOLVE_ERRORS = r"No match for argument|nothing provides|conflicting requests|cannot install both|Error:|Failed to"
+RESOLVE_ERRORS = (r"No match for argument|nothing provides|conflicting requests|cannot install both|Error:|Failed to|"
+                  r"Argument '[^'\n]+' matches only excluded packages\.")
 RESOLVE_SUMMARY = r"(?m)^Transaction Summary:?\s*$|^Nothing to do\.?\s*$"
 
 
@@ -330,12 +331,18 @@ def main() -> int:
         # what the gate parses.
         result = dnf_assumeno(dnf_path(), repos, [args.resolve_one])
         print(result.stdout, end="", flush=True)
-        if transaction_resolves(result):
+        if re.search(r"Failed to download metadata|Failed to load repository|"
+                       r"Cannot download repomd\.xml|Errors during downloading metadata|Curl error",
+                       result.stdout, re.IGNORECASE):
+            # A known absence must not mask a broken repository in the same log.
+            verdict = 2
+        elif transaction_resolves(result):
             verdict = 0
         elif result.returncode in (0, 1) and re.search(
                 r"No match for argument|Unable to find a match|nothing provides|"
                 r"conflicting requests|cannot install both|"
-                r"none of the providers can be installed|cannot install the best candidate",
+                r"none of the providers can be installed|cannot install the best candidate|"
+                r"Argument '[^'\n]+' matches only excluded packages\.",
                 result.stdout, re.IGNORECASE):
             verdict = 1
         else:

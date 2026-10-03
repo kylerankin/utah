@@ -85,12 +85,18 @@ that now resolve must leave `[unavailable]`; `fish` is a deliberate #419
 exclusion that must stay excluded and resolvable. Do not replace this policy
 with an assertion that every entry is absent. The installer reports
 `--resolve-one` verdict 0 for a valid transaction, 1 for a package/dependency
-absence, and 2 for a repository failure, unexpected exit or missing
-transaction evidence. The outer gate rejects verdict 2 and missing verdicts
+absence (including DNF5's `Argument 'NAME' matches only excluded packages.`
+when repository policy hides an unsafe build), and 2 for a repository failure,
+unexpected exit or missing transaction evidence. Keep the GRUB exclusion until
+the factory's EFI vendor matches the base; do not disable exclusions to make
+the availability probe pass. The outer gate rejects verdict 2 and missing verdicts
 rather than recording a broken repository as a real parity gap. Only the
 container engine's exit 125 is retried by the recipe; package failures are
 not transient by assumption. No separate `--assert-unavailable` API or
 second metadata-reader helper is needed.
+Repository metadata and transport errors take precedence over both an absence
+diagnostic and a transaction summary in the same output; neither establishes
+availability when the probe's repositories failed.
 
 ## multimedia_overrides are not missing packages
 

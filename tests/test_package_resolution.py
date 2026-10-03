@@ -341,11 +341,33 @@ class ResolveOneTests(unittest.TestCase):
                 self.assertEqual(rc, 1)
                 self.assertIn("UTAH_RESOLVE_ONE candidate 1", log.splitlines())
 
+    def test_repository_excluded_candidate_is_unavailable(self):
+        # DNF5's real #408 CI output: a healthy repository hides GRUB until
+        # its EFI vendor matches the base. This is not a repository failure.
+        output = ("Updating and loading repositories:\nRepositories loaded.\n"
+                  "Failed to resolve the transaction:\n"
+                  "Argument 'grub2-efi-x64-cdboot' matches only excluded packages.\n")
+        rc, _, log = self.probe(output)
+        self.assertEqual(rc, 1)
+        self.assertIn("UTAH_RESOLVE_ONE candidate 1", log.splitlines())
+
+    def test_exclusion_diagnostic_cannot_pass_beside_a_summary(self):
+        output = ("Argument 'candidate' matches only excluded packages.\n"
+                  "Transaction Summary:\nOperation aborted by the user.\n")
+        self.assertEqual(self.probe(output)[0], 1)
+
     def test_probe_failure_is_not_an_unavailable_verdict(self):
         for code, output in ((1, "Error: Failed to download metadata\n"),
                              (1, "Operation aborted.\n"),
                              (2, "Transaction Summary\n"),
-                             (125, "No match for argument: candidate\n")):
+                             (125, "No match for argument: candidate\n"),
+                             (1, "Unrecognized resolver failure\n"),
+                             (1, "Error: Failed to load repository exclusions\n"),
+                             (1, "Error: Failed to download metadata\n"
+                                 "Argument 'candidate' matches only excluded packages.\n"),
+                             (1, "Cannot download repomd.xml\nTransaction Summary:\n"),
+                             (1, "Curl error (6): could not resolve host\nTransaction Summary:\n"),
+                             (2, "Argument 'candidate' matches only excluded packages.\n")):
             with self.subTest(code=code, output=output):
                 rc, _, log = self.probe(output, code=code)
                 self.assertEqual(rc, 2)
