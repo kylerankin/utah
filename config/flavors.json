@@ -8,8 +8,8 @@
   "suites": {
     "main": "smoke,common",
     "nvidia": "smoke,common,nvidia",
-    "gaming": "smoke,common,bazzite",
-    "nvidia-gaming": "smoke,common,nvidia,bazzite"
+    "gaming": "smoke,common",
+    "nvidia-gaming": "smoke,common,nvidia"
   },
   "retired": {}
 }

@@ -350,15 +350,16 @@ so the order below does not sequence smoke ahead of the other suites:
 |--------|-------|--------|
 | main | `utah` | `smoke,common` |
 | nvidia | `utah-nvidia` | `smoke,common,nvidia` |
-| gaming | `utah-gaming` | `smoke,common,bazzite` |
-| nvidia-gaming | `utah-nvidia-gaming` | `smoke,common,nvidia,bazzite` |
+| gaming | `utah-gaming` | `smoke,common` |
+| nvidia-gaming | `utah-nvidia-gaming` | `smoke,common,nvidia` |
 
-The `bazzite` suite runs Bazzite GNOME extension and shell checks, including
-Logo Menu expectations; it does not assert Utah's gaming kernel or modules.
-Compatibility with Utah's desktop must be established by the gate run, not
-inferred from that suite name. The `nvidia` suite is hardware-blocked at the
-pinned test ref: every scenario is tagged `@hardware_blocked` and excluded,
-so its success is not NVIDIA kernel/module, CUDA, Vulkan or GPU evidence.
+No Utah flavor runs the `bazzite` suite. It asserts a Bazzite-only set of GNOME
+extensions (Logo Menu, Hot Edge, Blur My Shell, GSConnect, Add to Steam, …) whose
+runner is documented for `ghcr.io/ublue-os/bazzite:latest`; Utah ships none of
+them, so a `bazzite` leg would fail against a Utah image regardless of the
+gaming kernel or modules. The `nvidia` suite is hardware-blocked at the pinned
+test ref: every scenario is tagged `@hardware_blocked` and excluded, so its
+success is not NVIDIA kernel/module, CUDA, Vulkan or GPU evidence.
 Those hardware assertions require runnable upstream scenarios and an appropriate
 GPU runner before #13's full flavor-coverage criterion can be claimed.
 The reusable workflow (`ee82d53...`) and tests (`4c053fd...`) are SHA-pinned,
