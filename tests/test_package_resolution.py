@@ -345,7 +345,11 @@ class ResolveOneTests(unittest.TestCase):
         for code, output in ((1, "Error: Failed to download metadata\n"),
                              (1, "Operation aborted.\n"),
                              (2, "Transaction Summary\n"),
-                             (125, "No match for argument: candidate\n")):
+                             (125, "No match for argument: candidate\n"),
+                             (1, "Ignoring repositories: fedora\n"
+                                 "No match for argument: candidate\n"),
+                             (1, "Error: Failed to download metadata for repo 'fedora'\n"
+                                 "No match for argument: candidate\n")):
             with self.subTest(code=code, output=output):
                 rc, _, log = self.probe(output, code=code)
                 self.assertEqual(rc, 2)
