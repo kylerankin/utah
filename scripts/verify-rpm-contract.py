@@ -97,10 +97,19 @@ FACTORY_PIN_RE = re.compile(r"^# factory-pin: (?P<digest>\S+)\s*$", re.MULTILINE
 # enabled=/priority= with no baseurl= -- that is how the base disables a repo it
 # ships. Such a partial override of an allowlisted id is not a fresh pin, so the
 # gate validates it only for the keys it sets (allowlist membership and security
-# options) but never rejects it for a missing baseurl; a drop-in that *does* set
-# a baseurl is pinned like any other enabled repo. is_override on
-# check_repo_sections selects this treatment for OVERRIDE_REPOS_DIRS (#524).
+# options) but never rejects it for a missing baseurl; a drop-in that sets any
+# origin key (baseurl=, metalink= or mirrorlist=) is pinned like any other
+# enabled repo. is_override on check_repo_sections selects this treatment for
+# OVERRIDE_REPOS_DIRS (#524).
 DISABLED_VALUES: frozenset[str] = frozenset({"0", "false", "no", "off"})
+
+# Keys that name where a repository fetches from. An override section that sets
+# any of them is a fresh origin, not a partial override, and is pinned (#524).
+ORIGIN_KEYS: tuple[str, ...] = ("baseurl", "metalink", "mirrorlist")
+
+# libdnf5 matches override section names against repo ids as globs, so
+# [*] or [utah-*] in a drop-in applies to every matching repo (#524).
+GLOB_CHARS_RE = re.compile(r"[*?\[]")
 
 
 def section(overlay: Path, name: str, key: str = "packages") -> list[str]:
@@ -557,6 +566,37 @@ def repo_security_option_errors(
     return errors
 
 
+def glob_override_errors(
+    section_name: str,
+    parser: configparser.ConfigParser,
+    source: str,
+    partial_override: bool,
+) -> list[str]:
+    """Gate a wildcard override section, which applies to every matching repo id.
+
+    The gate cannot know every repo id the glob matches, so a wildcard override
+    passes only when it cannot widen what the allowlist approved: it sets no
+    origin key, does not set enabled= to a truthy value (which would turn on
+    any disabled, unapproved repo it matches), and sets no security option
+    that would weaken an allowlisted repo it matches.
+    """
+    errors: list[str] = []
+    if not partial_override:
+        errors.append(
+            f"Wildcard repository override '{section_name}' in {source} sets "
+            f"{'/'.join(ORIGIN_KEYS)}; it would reroute every repository it matches"
+        )
+    if parser.has_option(section_name, "enabled") and is_repo_enabled(
+        parser.get(section_name, "enabled")
+    ):
+        errors.append(
+            f"Wildcard repository override '{section_name}' in {source} sets "
+            "enabled=1; it would enable repositories the allowlist does not name"
+        )
+    errors.extend(repo_security_option_errors(section_name, parser, source))
+    return errors
+
+
 def check_repo_sections(
     parser: configparser.ConfigParser,
     source: str,
@@ -571,13 +611,23 @@ def check_repo_sections(
     part of a repo id (enabled=/priority= with no baseurl=); a partial override
     of an allowlisted id is not a fresh pin, so it is validated only for the
     keys it sets -- allowlist membership and any security options -- but is never
-    rejected for a missing baseurl. A drop-in that *does* set a baseurl is pinned
-    like any other enabled repo (#524).
+    rejected for a missing baseurl. A drop-in that sets any origin key (baseurl=,
+    metalink= or mirrorlist=) is pinned like any other enabled repo. A wildcard
+    override section name is a glob over repo ids and goes through
+    glob_override_errors instead (#524).
     """
     errors: list[str] = []
     for section_name in parser.sections():
-        # A partial override sets no baseurl of its own; it is not a pin.
-        partial_override = is_override and not parser.has_option(section_name, "baseurl")
+        # A partial override sets no origin (baseurl/metalink/mirrorlist) of its
+        # own; it is not a pin. One that sets any origin key is pinned.
+        partial_override = is_override and not any(
+            parser.has_option(section_name, key) for key in ORIGIN_KEYS
+        )
+        if is_override and GLOB_CHARS_RE.search(section_name):
+            errors.extend(
+                glob_override_errors(section_name, parser, source, partial_override)
+            )
+            continue
         pin = expected_baseurls is not None and not partial_override
         if not is_repo_enabled(parser.get(section_name, "enabled", fallback="1")):
             if section_name in allowed_repos:
@@ -1037,7 +1087,7 @@ def main() -> int:
     # override coverage. Override drop-ins are partial by design (a section may set
     # only enabled=/priority= with no baseurl=), so is_override=True validates each
     # only for the keys it sets and never rejects a missing baseurl, while a
-    # drop-in that does set a baseurl is still pinned.
+    # drop-in that sets baseurl=/metalink=/mirrorlist= is still pinned.
     for repos_dir in OVERRIDE_REPOS_DIRS:
         repo_errors.extend(
             verify_repository_policy(

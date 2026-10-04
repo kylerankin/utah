@@ -158,12 +158,20 @@ separately (#527).
   fixed constants -- a base image setting `reposdir=` does not add or remove
   them (#536) -- so the gate scans them regardless of the runtime list; an
   image that points `reposdir=` elsewhere still gets override coverage instead
-  of silently dropping it. A `.`-override drop-in is partial by design: a
+  of silently dropping it. A `.repo` override drop-in is partial by design: a
   `[id]` section may set only `enabled=`/`priority=` with no `baseurl=` (that is
   how the base disables a repo it ships), so the gate validates such a partial
-  override only for the keys it sets -- allowlist membership and any security
-  options -- but never rejects it for a missing `baseurl=`. A drop-in that
-  *does* set a `baseurl=` is pinned like any other enabled repo.
+  override only for the keys it sets -- allowlist membership and the
+  `proxy=`/`sslverify=` security options -- but never rejects it for a missing
+  `baseurl=`. A drop-in that sets any origin key (`baseurl=`, `metalink=` or
+  `mirrorlist=`) is pinned like any other enabled repo, so a `metalink=` or
+  `mirrorlist=` redirect fails the gate.
+- dnf5 matches override section names against repo ids as **globs**, so a
+  `[*]` or `[utah-*]` section applies to every matching repo. The gate cannot
+  enumerate those matches, so a wildcard override passes only when it cannot
+  widen the allowlist: it sets no origin key, does not set `enabled=` to a
+  true value, and sets no `proxy=` or disabled `sslverify=`. A `[*]` drop-in
+  that sets only `priority=` or `enabled=0` passes.
 
 
 ## Printing and scanning gaps

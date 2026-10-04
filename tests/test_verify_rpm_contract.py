@@ -129,6 +129,7 @@ def run_main(module, manifest: Path, overlay: Path, installed: set[str],
              extra_argv: list[str] | None = None,
              report_dir: Path | None = None,
              runtime_repos_dirs: "Path | list[Path] | None" = None,
+             override_repos_dirs: "Path | list[Path] | None" = None,
              stderr_buffer: io.StringIO | None = None,
              reposdir_error: Exception | None = None) -> tuple[int, str, str]:
     """Invoke scripts/verify-rpm-contract.py's main() with stubbed packages.
@@ -184,12 +185,20 @@ def run_main(module, manifest: Path, overlay: Path, installed: set[str],
             raise reposdir_error
         return list(runtime_repos)
 
+    if override_repos_dirs is None:
+        override_repos: list[Path] = []
+    elif isinstance(override_repos_dirs, Path):
+        override_repos = [override_repos_dirs]
+    else:
+        override_repos = list(override_repos_dirs)
+
     stderr_text = ""
     base_patches = [
         patch.object(module, "is_installed",
                      side_effect=lambda p: p in installed),
         patch.object(module, "query_packages", side_effect=fake_query),
         patch.object(module, "runtime_reposdir_paths", runtime_reposdir_paths),
+        patch.object(module, "OVERRIDE_REPOS_DIRS", tuple(override_repos)),
         patch.object(sys, "argv", argv),
         patch.dict(os.environ, {"IMAGE_FLAVOR": flavor, "UTAH_REPORT_DIR": str(report_dir)}),
         redirect_stdout(stdout),
@@ -1561,7 +1570,7 @@ class MainSectionSecurityTests(unittest.TestCase):
 
 
 class OnImageRepoAllowlistTests(unittest.TestCase):
-    """The on-image run scans dnf5's default reposdir paths (#454, #513).
+    """The on-image run scans dnf5's default reposdir paths and override dirs (#454, #513, #524).
 
     `--check` already enforces the repository allowlist against the source
     repo files in `packages/`. The Hummingbird base image ships its own repo
@@ -1570,7 +1579,13 @@ class OnImageRepoAllowlistTests(unittest.TestCase):
     runtime repo set passes, an enabled Fedora or unapproved repo fails, a
     disabled repo is skipped, and a repo the base ships in a default reposdir
     other than /etc/yum.repos.d (that is, /etc/distro.repos.d or
-    /usr/share/dnf5/repos.d) is gated just the same (#513).
+    /usr/share/dnf5/repos.d) is gated just the same (#513). The two dnf5
+    repo-override drop-in dirs (/etc/dnf/repos.override.d and
+    /usr/share/dnf5/repos.override.d) are scanned unconditionally, so a repo the
+    base enables there -- including one it left disabled in a reposdir -- is
+    gated too (#524). A drop-in is partial by design, so an allowlisted repo
+    overridden with enabled=0 and no baseurl= passes, while one that sets a
+    baseurl is still pinned.
     """
 
     def setUp(self) -> None:
@@ -1578,10 +1593,12 @@ class OnImageRepoAllowlistTests(unittest.TestCase):
 
     def run_main(self, manifest: Path, overlay: Path, installed: set[str],
                  runtime_repos_dirs: "Path | list[Path]",
+                 override_repos_dirs: "Path | list[Path] | None" = None,
                  flavor: str = "main") -> tuple[int, str, str]:
         return run_main(
             self.module, manifest, overlay, installed,
             flavor=flavor, runtime_repos_dirs=runtime_repos_dirs,
+            override_repos_dirs=override_repos_dirs,
             stderr_buffer=io.StringIO(),
         )
 
@@ -2175,6 +2192,90 @@ class OnImageRepoAllowlistTests(unittest.TestCase):
             )
         self.assertEqual(code, 1)
         self.assertIn("Unapproved repository 'third-party' is enabled", err)
+
+    def run_override(self, override_text: str) -> tuple[int, str]:
+        """Run the gate with a pinned allowlisted utah-packages and one override drop-in."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(
+                directory,
+                gnome=["gnome-shell"],
+                repositories=["public-hummingbird-x86_64-rpms", "utah-packages"],
+                baseurls={
+                    "public-hummingbird-x86_64-rpms":
+                        "https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+                    "utah-packages":
+                        "https://packages.redhat.com/api/pulp-content/utah-packages/x86_64/",
+                },
+            )
+            runtime_repos = directory / "runtime-yum-repos"
+            write_repo_file(
+                runtime_repos, "public-hummingbird-x86_64-rpms",
+                baseurl="https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+            )
+            write_repo_file(
+                runtime_repos, "utah-packages",
+                baseurl="https://packages.redhat.com/api/pulp-content/utah-packages/x86_64/",
+            )
+            override_dir = directory / "dnf-repos-override.d"
+            override_dir.mkdir()
+            (override_dir / "override.repo").write_text(override_text)
+            code, _, err = self.run_main(
+                manifest, overlay, {"bash", "gnome-shell"},
+                runtime_repos, override_repos_dirs=override_dir,
+            )
+        return code, err
+
+    def test_a_metalink_only_override_of_an_allowlisted_repo_fails(self) -> None:
+        """A drop-in adding metalink= with no baseurl= is a redirect, not a partial override (#524)."""
+        code, err = self.run_override(
+            "[utah-packages]\nmetalink=https://attacker.example.com/metalink\n"
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("resolves via metalink", err)
+
+    def test_a_mirrorlist_only_override_of_an_allowlisted_repo_fails(self) -> None:
+        """A drop-in adding mirrorlist= with no baseurl= is pinned and fails (#524)."""
+        code, err = self.run_override(
+            "[utah-packages]\nmirrorlist=https://attacker.example.com/mirrors\n"
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("resolves via mirrorlist", err)
+
+    def test_a_wildcard_priority_override_passes(self) -> None:
+        """libdnf5 matches override section names as globs; [*] priority=99 is legitimate (#524)."""
+        code, err = self.run_override("[*]\npriority=99\n")
+        self.assertEqual(code, 0, err)
+
+    def test_a_wildcard_disable_override_passes(self) -> None:
+        """A glob override that only disables repos cannot widen the allowlist."""
+        code, err = self.run_override("[fedora*]\nenabled=0\n")
+        self.assertEqual(code, 0, err)
+
+    def test_a_wildcard_override_that_enables_repos_fails(self) -> None:
+        """A glob override setting enabled=1 could turn on unapproved disabled repos."""
+        code, err = self.run_override("[*]\nenabled=1\n")
+        self.assertEqual(code, 1)
+        self.assertIn("Wildcard repository override '*'", err)
+        self.assertIn("enabled=1", err)
+
+    def test_a_wildcard_override_that_sets_an_origin_fails(self) -> None:
+        """A glob override setting baseurl=/metalink= would reroute every matching repo."""
+        for key in ("baseurl", "metalink", "mirrorlist"):
+            with self.subTest(key=key):
+                code, err = self.run_override(
+                    f"[utah-*]\n{key}=https://attacker.example.com/x\n"
+                )
+                self.assertEqual(code, 1)
+                self.assertIn("Wildcard repository override 'utah-*'", err)
+
+    def test_a_wildcard_override_that_sets_a_proxy_fails(self) -> None:
+        """A glob override cannot weaken matching allowlisted repos with proxy=."""
+        code, err = self.run_override("[*]\nproxy=http://attacker.example.com:3128\n")
+        self.assertEqual(code, 1)
+        self.assertIn("proxy=", err)
+
 
 class UsageTests(unittest.TestCase):
     """The manifest argument is required; the verifier must not run without one."""
