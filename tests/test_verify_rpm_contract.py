@@ -1986,6 +1986,196 @@ class OnImageRepoAllowlistTests(unittest.TestCase):
         self.assertIn("[main] in dnf5 [main] config sets sslverify=0", stderr)
 
 
+    def test_a_partial_override_with_no_baseurl_passes(self) -> None:
+        """A repo-override drop-in that only sets enabled=0 on an allowlisted id passes.
+
+        This is the case hanthor asked for: the base ships `utah-packages` and
+        disables it with a partial [utah-packages] override (no baseurl=). A
+        partial override is not a fresh pin, so the gate must not reject it for a
+        missing baseurl (#524).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(
+                directory,
+                gnome=["gnome-shell"],
+                repositories=["public-hummingbird-x86_64-rpms", "utah-packages"],
+                baseurls={
+                    "public-hummingbird-x86_64-rpms":
+                        "https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+                    "utah-packages":
+                        "https://packages.redhat.com/api/pulp-content/utah-packages/x86_64/",
+                },
+            )
+            runtime_repos = directory / "runtime-yum-repos"
+            write_repo_file(
+                runtime_repos, "public-hummingbird-x86_64-rpms",
+                baseurl="https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+            )
+            write_repo_file(
+                runtime_repos, "utah-packages",
+                baseurl="https://packages.redhat.com/api/pulp-content/utah-packages/x86_64/",
+                enabled="0",
+            )
+            override_dir = directory / "dnf-repos-override.d"
+            write_repo_file(override_dir, "utah-packages", enabled="0")
+            code, _, err = self.run_main(
+                manifest, overlay, {"bash", "gnome-shell"},
+                runtime_repos, override_repos_dirs=override_dir,
+            )
+        self.assertEqual(code, 0, err)
+
+    def test_an_unapproved_repo_in_the_override_dir_fails(self) -> None:
+        """An unapproved repo id enabled by an override drop-in fails the allowlist."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(directory, gnome=["gnome-shell"])
+            runtime_repos = directory / "runtime-yum-repos"
+            write_repo_file(
+                runtime_repos, "public-hummingbird-x86_64-rpms",
+                baseurl="https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+            )
+            override_dir = directory / "dnf-repos-override.d"
+            write_repo_file(
+                override_dir, "third-party",
+                baseurl="https://third-party.example.com/$basearch",
+            )
+            code, _, err = self.run_main(
+                manifest, overlay, {"bash", "gnome-shell"},
+                runtime_repos, override_repos_dirs=override_dir,
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("Unapproved repository 'third-party' is enabled", err)
+
+    def test_a_fedora_repo_in_the_override_dir_fails(self) -> None:
+        """A Fedora repo id enabled by an override drop-in fails the gate."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(directory, gnome=["gnome-shell"])
+            runtime_repos = directory / "runtime-yum-repos"
+            write_repo_file(
+                runtime_repos, "public-hummingbird-x86_64-rpms",
+                baseurl="https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+            )
+            override_dir = directory / "dnf-repos-override.d"
+            write_repo_file(
+                override_dir, "fedora",
+                baseurl="https://mirror.example.com/fedora/$basearch/",
+            )
+            code, _, err = self.run_main(
+                manifest, overlay, {"bash", "gnome-shell"},
+                runtime_repos, override_repos_dirs=override_dir,
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("Fedora repository 'fedora' is enabled", err)
+
+    def test_an_override_that_reenables_a_disabled_repo_fails(self) -> None:
+        """The core #524 gap: an override re-enabling a repo the reposdir scan saw disabled is gated."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(
+                directory,
+                gnome=["gnome-shell"],
+                repositories=["public-hummingbird-x86_64-rpms", "utah-packages"],
+                baseurls={
+                    "public-hummingbird-x86_64-rpms":
+                        "https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+                    "utah-packages":
+                        "https://packages.redhat.com/api/pulp-content/utah-packages/x86_64/",
+                },
+            )
+            runtime_repos = directory / "runtime-yum-repos"
+            write_repo_file(
+                runtime_repos, "public-hummingbird-x86_64-rpms",
+                baseurl="https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+            )
+            # The base ships utah-packages but leaves it disabled in a reposdir.
+            write_repo_file(
+                runtime_repos, "utah-packages",
+                baseurl="https://packages.redhat.com/api/pulp-content/utah-packages/x86_64/",
+                enabled="0",
+            )
+            # A drop-in re-enables it with a different (unpinned) baseurl. The
+            # reposdir scan skips the disabled repo; only the override scan sees
+            # it enabled, and because it sets a baseurl it is pinned like any
+            # other enabled repo (#524).
+            override_dir = directory / "dnf-repos-override.d"
+            write_repo_file(
+                override_dir, "utah-packages",
+                baseurl="https://mirror.example.com/utah-packages/$basearch/",
+                enabled="1",
+            )
+            code, _, err = self.run_main(
+                manifest, overlay, {"bash", "gnome-shell"},
+                runtime_repos, override_repos_dirs=override_dir,
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("utah-packages", err)
+
+    def test_a_partial_override_that_sets_a_baseurl_is_pinned(self) -> None:
+        """A drop-in that sets a baseurl is still pinned, even though it is an override."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(
+                directory,
+                gnome=["gnome-shell"],
+                repositories=["public-hummingbird-x86_64-rpms", "utah-packages"],
+                baseurls={
+                    "public-hummingbird-x86_64-rpms":
+                        "https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+                    "utah-packages":
+                        "https://packages.redhat.com/api/pulp-content/utah-packages/x86_64/",
+                },
+            )
+            runtime_repos = directory / "runtime-yum-repos"
+            write_repo_file(
+                runtime_repos, "public-hummingbird-x86_64-rpms",
+                baseurl="https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+            )
+            write_repo_file(
+                runtime_repos, "utah-packages",
+                baseurl="https://packages.redhat.com/api/pulp-content/utah-packages/x86_64/",
+            )
+            # The override sets a baseurl, so it is a pin, not a partial drop-in:
+            # an unpinned baseurl fails even though is_override=True.
+            override_dir = directory / "dnf-repos-override.d"
+            write_repo_file(
+                override_dir, "utah-packages",
+                baseurl="https://mirror.example.com/utah-packages/$basearch/",
+            )
+            code, _, err = self.run_main(
+                manifest, overlay, {"bash", "gnome-shell"},
+                runtime_repos, override_repos_dirs=override_dir,
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("utah-packages", err)
+
+    def test_override_scan_runs_when_reposdir_is_empty(self) -> None:
+        """The override scan is unconditional: a reposdir= list that omits it still catches an override repo (#536)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(directory, gnome=["gnome-shell"])
+            # Simulate an image that set reposdir= to a path that does not exist
+            # here, so the runtime scan has nothing to scan.
+            runtime_repos = directory / "no-such-reposdir"
+            override_dir = directory / "dnf-repos-override.d"
+            write_repo_file(
+                override_dir, "third-party",
+                baseurl="https://third-party.example.com/$basearch",
+            )
+            code, _, err = self.run_main(
+                manifest, overlay, {"bash", "gnome-shell"},
+                runtime_repos, override_repos_dirs=override_dir,
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("Unapproved repository 'third-party' is enabled", err)
+
 class UsageTests(unittest.TestCase):
     """The manifest argument is required; the verifier must not run without one."""
 

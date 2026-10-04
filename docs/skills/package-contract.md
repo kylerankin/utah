@@ -153,6 +153,18 @@ separately (#527).
   `[main]` the same way (later file wins, an empty `proxy=` clears an earlier
   one) and fails if the effective value sets a proxy or disables TLS
   verification (#352).
+- The override drop-in dirs are scanned **unconditionally**, as a separate loop
+  never folded into the `reposdir=`-derived list (#524). dnf5 reads them as
+  fixed constants -- a base image setting `reposdir=` does not add or remove
+  them (#536) -- so the gate scans them regardless of the runtime list; an
+  image that points `reposdir=` elsewhere still gets override coverage instead
+  of silently dropping it. A `.`-override drop-in is partial by design: a
+  `[id]` section may set only `enabled=`/`priority=` with no `baseurl=` (that is
+  how the base disables a repo it ships), so the gate validates such a partial
+  override only for the keys it sets -- allowlist membership and any security
+  options -- but never rejects it for a missing `baseurl=`. A drop-in that
+  *does* set a `baseurl=` is pinned like any other enabled repo.
+
 
 ## Printing and scanning gaps
 
