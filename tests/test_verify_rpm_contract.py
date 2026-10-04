@@ -1413,6 +1413,133 @@ class Dnf5ConfigTests(unittest.TestCase):
         self.assertEqual(paths, list(self.module.DEFAULT_REPOS_DIRS))
 
 
+class MainSectionSecurityTests(unittest.TestCase):
+    """The resolved [main] block is inspected for proxy= and sslverify=0 (utah#352).
+
+    `check_repo_sections` only inspects `.repo` sections, so a proxy= or
+    sslverify=0 set globally in the [main] block of dnf.conf or a libdnf5
+    drop-in is never inspected. `main_section_security_errors` resolves those
+    options the way libdnf5 does (later file wins) and reports the effective
+    values; an unreadable or unparseable config fails closed.
+    """
+
+    def setUp(self) -> None:
+        self.module = load_module()
+
+    def _write_conf(self, directory: Path, name: str, body: str) -> Path:
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / name
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def test_no_main_section_is_clean(self) -> None:
+        """A config without a [main] block has no global security options to report."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            path = self._write_conf(directory, "10-base.conf", "[main]\n")
+            self.assertEqual(
+                self.module.main_section_security_errors([path], "dnf5 [main] config"),
+                [],
+            )
+
+    def test_proxy_in_main_is_reported(self) -> None:
+        """A proxy= in [main] is reported regardless of whether it is empty."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            path = self._write_conf(
+                directory, "10-base.conf", "[main]\nproxy=http://localhost:3128\n")
+            errors = self.module.main_section_security_errors([path], "dnf5 [main] config")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("proxy=http://localhost:3128", errors[0])
+
+    def test_sslverify_zero_in_main_is_reported(self) -> None:
+        """An sslverify=0 in [main] is reported."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            path = self._write_conf(directory, "10-base.conf", "[main]\nsslverify=0\n")
+            errors = self.module.main_section_security_errors([path], "dnf5 [main] config")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("sslverify=0", errors[0])
+
+    def test_sslverify_false_in_main_is_reported(self) -> None:
+        """An sslverify=false in [main] is reported (a falsy value disables verification)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            path = self._write_conf(directory, "10-base.conf", "[main]\nsslverify=false\n")
+            errors = self.module.main_section_security_errors([path], "dnf5 [main] config")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("sslverify=false", errors[0])
+
+    def test_proxy_and_sslverify_in_main_are_both_reported(self) -> None:
+        """A [main] that sets both proxy and sslverify reports both problems."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            path = self._write_conf(
+                directory, "10-base.conf",
+                "[main]\nproxy=http://localhost:3128\nsslverify=0\n",
+            )
+            errors = self.module.main_section_security_errors([path], "dnf5 [main] config")
+        self.assertEqual(len(errors), 2)
+
+    def test_later_file_wins_for_effective_sslverify(self) -> None:
+        """A later drop-in overrides an earlier sslverify=0, so only the effective value counts."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            early = self._write_conf(directory, "00-base.conf", "[main]\nsslverify=0\n")
+            late = self._write_conf(directory, "99-late.conf", "[main]\nsslverify=1\n")
+            errors = self.module.main_section_security_errors([early, late], "dnf5 [main] config")
+        self.assertEqual(errors, [])
+
+    def test_later_empty_proxy_clears_earlier_proxy(self) -> None:
+        """A later empty proxy= resets an earlier proxy, as libdnf5's last-wins does."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            early = self._write_conf(
+                directory, "00-base.conf", "[main]\nproxy=http://localhost:3128\n"
+            )
+            late = self._write_conf(directory, "99-late.conf", "[main]\nproxy=\n")
+            errors = self.module.main_section_security_errors([early, late], "dnf5 [main] config")
+        self.assertEqual(errors, [])
+
+    def test_malformed_config_fails_closed(self) -> None:
+        """A config that cannot be parsed raises Dnf5ConfigError, like parse_reposdir_from_config."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            path = self._write_conf(directory, "10-base.conf", "proxy=http://localhost:3128\n")
+            with self.assertRaises(self.module.Dnf5ConfigError):
+                self.module.main_section_security_errors([path], "dnf5 [main] config")
+
+    def test_sslverify_one_is_not_reported(self) -> None:
+        """An sslverify=1 in [main] keeps TLS verification on, so it is not reported."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            path = self._write_conf(directory, "10-base.conf", "[main]\nsslverify=1\n")
+            self.assertEqual(
+                self.module.main_section_security_errors([path], "dnf5 [main] config"),
+                [],
+            )
+
+    def test_uppercase_option_key_is_not_honoured(self) -> None:
+        """dnf5 parses option keys case-sensitively, so Proxy= does not set the effective proxy."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            path = self._write_conf(directory, "10-base.conf", "[main]\nProxy=http://localhost:3128\n")
+            self.assertEqual(
+                self.module.main_section_security_errors([path], "dnf5 [main] config"),
+                [],
+            )
+
+    def test_missing_file_is_clean(self) -> None:
+        """A config file that does not exist contributes no options."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            missing = directory / "does-not-exist.conf"
+            self.assertEqual(
+                self.module.main_section_security_errors([missing], "dnf5 [main] config"),
+                [],
+            )
+
+
 class OnImageRepoAllowlistTests(unittest.TestCase):
     """The on-image run scans dnf5's default reposdir paths (#454, #513).
 
@@ -1743,6 +1870,100 @@ class OnImageRepoAllowlistTests(unittest.TestCase):
             )
         self.assertEqual(code, 1)
         self.assertIn("ERROR: could not parse dnf5 config /etc/dnf/dnf.conf", err)
+
+    def test_a_global_proxy_in_main_fails_the_gate(self) -> None:
+        """A proxy= in the resolved [main] fails the gate even for a clean runtime repo set."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(
+                directory,
+                gnome=["gnome-shell"],
+                repositories=[
+                    "public-hummingbird-x86_64-rpms",
+                    "utah-packages",
+                    "nvidia-container-toolkit",
+                ],
+                baseurls={
+                    "public-hummingbird-x86_64-rpms":
+                        "https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+                    "utah-packages": "file:///etc/utah-packages",
+                    "nvidia-container-toolkit":
+                        "https://nvidia.github.io/libnvidia-container/stable/rpm/$basearch",
+                },
+            )
+            runtime_repos = directory / "runtime-yum-repos"
+            write_repo_file(
+                runtime_repos, "public-hummingbird-x86_64-rpms",
+                baseurl="https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+            )
+            write_repo_file(
+                runtime_repos, "utah-packages",
+                baseurl="file:///etc/utah-packages",
+            )
+            write_repo_file(
+                runtime_repos, "nvidia-container-toolkit",
+                baseurl="https://nvidia.github.io/libnvidia-container/stable/rpm/$basearch",
+                enabled="0",
+            )
+            dnf_main = directory / "dnf.conf"
+            dnf_main.write_text("[main]\nproxy=http://localhost:3128\n")
+            with patch.object(self.module, "dnf5_config_files",
+                              return_value=[dnf_main]), \
+                 patch.object(self.module, "is_installed",
+                              side_effect=lambda p: p in {"bash", "gnome-shell"}):
+                code, _, stderr = self.run_main(
+                    manifest, overlay, {"bash", "gnome-shell"}, runtime_repos,
+                )
+        self.assertEqual(code, 1)
+        self.assertIn("[main] in dnf5 [main] config sets proxy=http://localhost:3128", stderr)
+
+    def test_a_global_sslverify_zero_in_main_fails_the_gate(self) -> None:
+        """An sslverify=0 in the resolved [main] fails the gate even for a clean runtime repo set."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(
+                directory,
+                gnome=["gnome-shell"],
+                repositories=[
+                    "public-hummingbird-x86_64-rpms",
+                    "utah-packages",
+                    "nvidia-container-toolkit",
+                ],
+                baseurls={
+                    "public-hummingbird-x86_64-rpms":
+                        "https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+                    "utah-packages": "file:///etc/utah-packages",
+                    "nvidia-container-toolkit":
+                        "https://nvidia.github.io/libnvidia-container/stable/rpm/$basearch",
+                },
+            )
+            runtime_repos = directory / "runtime-yum-repos"
+            write_repo_file(
+                runtime_repos, "public-hummingbird-x86_64-rpms",
+                baseurl="https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/",
+            )
+            write_repo_file(
+                runtime_repos, "utah-packages",
+                baseurl="file:///etc/utah-packages",
+            )
+            write_repo_file(
+                runtime_repos, "nvidia-container-toolkit",
+                baseurl="https://nvidia.github.io/libnvidia-container/stable/rpm/$basearch",
+                enabled="0",
+            )
+            dnf_main = directory / "dnf.conf"
+            dnf_main.write_text("[main]\nsslverify=0\n")
+            with patch.object(self.module, "dnf5_config_files",
+                              return_value=[dnf_main]), \
+                 patch.object(self.module, "is_installed",
+                              side_effect=lambda p: p in {"bash", "gnome-shell"}):
+                code, _, stderr = self.run_main(
+                    manifest, overlay, {"bash", "gnome-shell"}, runtime_repos,
+                )
+        self.assertEqual(code, 1)
+        self.assertIn("[main] in dnf5 [main] config sets sslverify=0", stderr)
 
 
 class UsageTests(unittest.TestCase):

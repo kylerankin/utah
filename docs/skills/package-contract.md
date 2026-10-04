@@ -148,6 +148,11 @@ separately (#527).
   base ships in `/etc/distro.repos.d` or `/usr/share/dnf5/repos.d` is enabled
   at runtime exactly as one in `/etc/yum.repos.d`, so scanning only the
   first would leave it invisible to the gate (#513).
+- A `proxy=` or `sslverify=0` in the resolved `[main]` section of the same dnf5
+  configs applies to every allowlisted repository, so the gate resolves
+  `[main]` the same way (later file wins, an empty `proxy=` clears an earlier
+  one) and fails if the effective value sets a proxy or disables TLS
+  verification (#352).
 
 ## Printing and scanning gaps
 

@@ -229,6 +229,61 @@ def runtime_reposdir_paths() -> list[Path]:
     return list(configured) if configured is not None else list(DEFAULT_REPOS_DIRS)
 
 
+def main_section_security_errors(
+    config_files: list[Path], source: str
+) -> list[str]:
+    """Global options in the resolved [main] that reroute or weaken every repo.
+
+    `proxy=` and `sslverify=0` set in the [main] section of dnf.conf or a
+    libdnf5 drop-in apply to every allowlisted repository, so the per-section
+    check in `check_repo_sections` -- which only inspects `.repo` sections and
+    never the [main] block -- never inspects them (utah#352, adjacent to #339).
+    Resolve the [main] options the way libdnf5 does (later file's value wins,
+    including an empty `proxy=` clearing an earlier one) and report the
+    effective values, using the same case-sensitive, `=`-only parsing as
+    `parse_reposdir_from_config` so the gate reads what dnf5 reads. Like that
+    function, a config that exists but cannot be read or parsed raises
+    Dnf5ConfigError so the caller fails the gate closed.
+    """
+    proxy = ""
+    sslverify = ""
+    for path in config_files:
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as err:
+            raise Dnf5ConfigError(f"could not read dnf5 config {path}: {err}") from err
+        parser = configparser.ConfigParser(
+            interpolation=None,
+            strict=False,
+            delimiters=("=",),
+        )
+        parser.optionxform = str
+        try:
+            parser.read_string(text, source=str(path))
+        except configparser.Error as err:
+            raise Dnf5ConfigError(f"could not parse dnf5 config {path}: {err}") from err
+        if not parser.has_section("main"):
+            continue
+        if parser.has_option("main", "proxy"):
+            proxy = parser.get("main", "proxy").strip()
+        if parser.has_option("main", "sslverify"):
+            sslverify = parser.get("main", "sslverify").strip()
+    errors: list[str] = []
+    if proxy:
+        errors.append(
+            f"[main] in {source} sets proxy={proxy}; a proxy routes every allowlisted "
+            "repository's fetches through an origin the allowlist does not name"
+        )
+    if sslverify.lower() in DISABLED_VALUES:
+        errors.append(
+            f"[main] in {source} sets sslverify={sslverify}; disabling TLS verification "
+            "accepts any certificate every allowlisted repository presents"
+        )
+    return errors
+
+
 def is_installed(package: str) -> bool:
     """Whether an RPM named `package` is installed (rpm -q exit status)."""
     return subprocess.run(["rpm", "-q", package], capture_output=True).returncode == 0
@@ -923,6 +978,16 @@ def main() -> int:
                 expected_baseurls=repo_baseurls, check_mode=False,
             )
         )
+    # A proxy= or sslverify=0 in the resolved [main] section of dnf.conf/libdnf5.conf
+    # applies to every allowlisted repository, so the per-section check above never
+    # inspects it. Resolve the [main] options the way libdnf5 does and report the
+    # effective values (utah#352, adjacent to #339).
+    try:
+        repo_errors.extend(
+            main_section_security_errors(dnf5_config_files(), "dnf5 [main] config")
+        )
+    except Dnf5ConfigError as err:
+        repo_errors.append(str(err))
     if repo_errors:
         for err in repo_errors:
             print(f"ERROR: {err}", file=sys.stderr)
