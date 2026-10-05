@@ -2256,6 +2256,25 @@ class OnImageRepoAllowlistTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("proxy=", err)
 
+    def test_a_priority_only_override_of_an_unapproved_repo_names_it_as_an_override(self) -> None:
+        """A non-allowlisted partial override is not reported as an enabled allowlisted repo."""
+        code, err = self.run_override("[third-party]\npriority=10\nsslverify=0\n")
+        self.assertEqual(code, 1)
+        self.assertIn("Repository override 'third-party'", err)
+        self.assertIn("sslverify=0", err)
+        self.assertNotIn("Allowlisted repository 'third-party'", err)
+
+    def test_an_enable_only_override_of_an_unapproved_repo_fails(self) -> None:
+        """The core #524 gap: enabled=1 with no origin key re-enables an unapproved id."""
+        code, err = self.run_override("[third-party]\nenabled=1\n")
+        self.assertEqual(code, 1)
+        self.assertIn("Unapproved repository 'third-party' is enabled", err)
+
+    def test_an_enable_only_override_of_an_allowlisted_repo_passes(self) -> None:
+        """enabled=1 with no origin key on an allowlisted id is a partial override, not a pin."""
+        code, err = self.run_override("[utah-packages]\nenabled=1\n")
+        self.assertEqual(code, 0, err)
+
     def test_a_wildcard_priority_override_passes(self) -> None:
         """libdnf5 matches override section names as globs; [*] priority=99 is legitimate (#524)."""
         code, err = self.run_override("[*]\npriority=99\n")
@@ -2287,6 +2306,7 @@ class OnImageRepoAllowlistTests(unittest.TestCase):
         """A glob override cannot weaken matching allowlisted repos with proxy=."""
         code, err = self.run_override("[*]\nproxy=http://attacker.example.com:3128\n")
         self.assertEqual(code, 1)
+        self.assertIn("Wildcard repository override '*'", err)
         self.assertIn("proxy=", err)
 
 

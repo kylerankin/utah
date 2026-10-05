@@ -546,20 +546,29 @@ def repo_security_option_errors(
     section_name: str,
     parser: configparser.ConfigParser,
     source: str,
+    *,
+    subject: str | None = None,
 ) -> list[str]:
-    """Name options that reroute or weaken an allowlisted repository's fetch."""
+    """Name options that reroute or weaken a repository's fetch.
+
+    `subject` replaces the default "Allowlisted repository ... is enabled in
+    <source>" lead for callers (dnf5 repo overrides) whose section is not
+    necessarily allowlisted or enabled.
+    """
+    if subject is None:
+        subject = f"Allowlisted repository '{section_name}' is enabled in {source}"
     errors: list[str] = []
     proxy = parser.get(section_name, "proxy", fallback="").strip()
     if proxy:
         errors.append(
-            f"Allowlisted repository '{section_name}' is enabled in {source} with "
+            f"{subject} with "
             f"proxy={proxy}; a proxy routes fetches through an origin the allowlist "
             "does not name"
         )
     sslverify = parser.get(section_name, "sslverify", fallback="").strip()
     if sslverify.lower() in DISABLED_VALUES:
         errors.append(
-            f"Allowlisted repository '{section_name}' is enabled in {source} with "
+            f"{subject} with "
             f"sslverify={sslverify}; disabling TLS verification accepts any certificate "
             "the origin presents"
         )
@@ -593,7 +602,10 @@ def glob_override_errors(
             f"Wildcard repository override '{section_name}' in {source} sets "
             "enabled=1; it would enable repositories the allowlist does not name"
         )
-    errors.extend(repo_security_option_errors(section_name, parser, source))
+    errors.extend(repo_security_option_errors(
+        section_name, parser, source,
+        subject=f"Wildcard repository override '{section_name}' in {source}",
+    ))
     return errors
 
 
@@ -633,7 +645,10 @@ def check_repo_sections(
         if partial_override and not parser.has_option(section_name, "enabled"):
             # A priority-only drop-in never enables a repo by itself; only the
             # keys it sets can weaken whatever repo it targets (#524).
-            errors.extend(repo_security_option_errors(section_name, parser, source))
+            errors.extend(repo_security_option_errors(
+                section_name, parser, source,
+                subject=f"Repository override '{section_name}' in {source}",
+            ))
             continue
         pin = expected_baseurls is not None and not partial_override
         if not is_repo_enabled(parser.get(section_name, "enabled", fallback="1")):
