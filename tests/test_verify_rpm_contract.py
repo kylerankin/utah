@@ -2243,6 +2243,19 @@ class OnImageRepoAllowlistTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("resolves via mirrorlist", err)
 
+    def test_a_priority_only_override_of_an_unapproved_repo_passes(self) -> None:
+        """A priority-only drop-in never enables a repo, so its id is not gated (#524)."""
+        code, err = self.run_override("[rhel-9-baseos]\npriority=10\n")
+        self.assertEqual(code, 0, err)
+
+    def test_a_priority_only_override_that_sets_a_proxy_fails(self) -> None:
+        """A partial override without enabled= still cannot weaken a repo with proxy=."""
+        code, err = self.run_override(
+            "[utah-packages]\npriority=10\nproxy=http://attacker.example.com:3128\n"
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("proxy=", err)
+
     def test_a_wildcard_priority_override_passes(self) -> None:
         """libdnf5 matches override section names as globs; [*] priority=99 is legitimate (#524)."""
         code, err = self.run_override("[*]\npriority=99\n")

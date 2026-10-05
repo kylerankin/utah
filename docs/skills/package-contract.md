@@ -130,9 +130,9 @@ than from the repository contents living in the image.
 The allowlist also runs **on-image**, against the composed image's runtime RPM
 repositories, not just the source files in `packages/`. `verify-rpm-contract.py`
 scans every `reposdir` dnf5 resolves at runtime, not a hardcoded list of
-defaults (#454, #513, #536). Repository override directories
-(`/etc/dnf/repos.override.d`) are not covered here; they are tracked
-separately (#527).
+defaults (#454, #513, #536). It also scans dnf5's repository override
+directories, `/etc/dnf/repos.override.d` and
+`/usr/share/dnf5/repos.override.d` (#524).
 
 - The `reposdir=` option in `/usr/share/dnf5/libdnf.conf.d/*.conf`,
   `/etc/dnf/libdnf5.conf.d/*.conf`, or `/etc/dnf/dnf.conf` replaces the
@@ -163,7 +163,9 @@ separately (#527).
   how the base disables a repo it ships), so the gate validates such a partial
   override only for the keys it sets -- allowlist membership and the
   `proxy=`/`sslverify=` security options -- but never rejects it for a missing
-  `baseurl=`. A drop-in that sets any origin key (`baseurl=`, `metalink=` or
+  `baseurl=`. A partial override that leaves `enabled=` unset (for example
+  `priority=` only) does not enable the repo, so it passes for any id unless
+  it sets a `proxy=` or disabled `sslverify=`. A drop-in that sets any origin key (`baseurl=`, `metalink=` or
   `mirrorlist=`) is pinned like any other enabled repo, so a `metalink=` or
   `mirrorlist=` redirect fails the gate.
 - dnf5 matches override section names against repo ids as **globs**, so a
@@ -172,7 +174,6 @@ separately (#527).
   widen the allowlist: it sets no origin key, does not set `enabled=` to a
   true value, and sets no `proxy=` or disabled `sslverify=`. A `[*]` drop-in
   that sets only `priority=` or `enabled=0` passes.
-
 
 ## Printing and scanning gaps
 

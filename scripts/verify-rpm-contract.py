@@ -611,7 +611,9 @@ def check_repo_sections(
     part of a repo id (enabled=/priority= with no baseurl=); a partial override
     of an allowlisted id is not a fresh pin, so it is validated only for the
     keys it sets -- allowlist membership and any security options -- but is never
-    rejected for a missing baseurl. A drop-in that sets any origin key (baseurl=,
+    rejected for a missing baseurl. A partial override that leaves enabled= unset
+    (e.g. priority= only) does not enable the repo, so only its security options
+    are checked, whatever the id. A drop-in that sets any origin key (baseurl=,
     metalink= or mirrorlist=) is pinned like any other enabled repo. A wildcard
     override section name is a glob over repo ids and goes through
     glob_override_errors instead (#524).
@@ -627,6 +629,11 @@ def check_repo_sections(
             errors.extend(
                 glob_override_errors(section_name, parser, source, partial_override)
             )
+            continue
+        if partial_override and not parser.has_option(section_name, "enabled"):
+            # A priority-only drop-in never enables a repo by itself; only the
+            # keys it sets can weaken whatever repo it targets (#524).
+            errors.extend(repo_security_option_errors(section_name, parser, source))
             continue
         pin = expected_baseurls is not None and not partial_override
         if not is_repo_enabled(parser.get(section_name, "enabled", fallback="1")):
