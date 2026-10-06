@@ -64,6 +64,16 @@ class InputsTests(unittest.TestCase):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_privileged_tacklebox_consumers_share_one_digest_pin(self):
+        pin = (ROOT / "config/tacklebox-image").read_text().strip()
+        self.assertRegex(pin, r"^ghcr.io/tuna-os/tacklebox:latest@sha256:[a-f0-9]{64}$")
+        for path in ("iso/scripts/build-iso-tacklebox.sh", ".github/workflows/post-testing-e2e.yml"):
+            source = (ROOT / path).read_text()
+            self.assertIn("config/tacklebox-image", source)
+            self.assertNotIn("ghcr.io/tuna-os/tacklebox:latest", source)
+        managers = json.loads((ROOT / "renovate.json").read_text())["customManagers"]
+        self.assertTrue(any("/^config/tacklebox-image$/" in m["managerFilePatterns"] for m in managers))
+
     def test_ogc_config_gate_rejects_each_missing_live_boot_feature(self):
         script = (ROOT / "scripts/install-ogc-kernel.sh").read_text()
         # Execute only the pure config gate, never the package/kernel installer.
