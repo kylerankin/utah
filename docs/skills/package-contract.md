@@ -186,17 +186,21 @@ directories, `/etc/dnf/repos.override.d` and
   `[id]` section may set only `enabled=`/`priority=` with no `baseurl=` (that is
   how the base disables a repo it ships), so the gate validates such a partial
   override only for the keys it sets -- allowlist membership and the
-  `proxy=`/`sslverify=` security options -- but never rejects it for a missing
-  `baseurl=`. A partial override that leaves `enabled=` unset (for example
-  `priority=` only) does not enable the repo, so it passes for any id unless
-  it sets a `proxy=` or disabled `sslverify=`. A drop-in that sets any origin key (`baseurl=`, `metalink=` or
+  `proxy=`/`sslverify=`/`gpgcheck=`/`pkg_gpgcheck=`/`repo_gpgcheck=` security
+  options -- but never rejects it for a missing `baseurl=`. A partial override
+  that leaves `enabled=` unset (for example `priority=` only) does not enable
+  the repo, so it passes for any id unless it sets a `proxy=` or disables
+  `sslverify=` or an unapproved signature check (`gpgcheck=`, `pkg_gpgcheck=`,
+  `repo_gpgcheck=`). A drop-in that sets any origin key (`baseurl=`, `metalink=` or
   `mirrorlist=`) is pinned like any other enabled repo, so a `metalink=` or
   `mirrorlist=` redirect fails the gate.
 - dnf5 matches override section names against repo ids as **globs**, so a
   `[*]` or `[utah-*]` section applies to every matching repo. The gate cannot
   enumerate those matches, so a wildcard override passes only when it cannot
   widen the allowlist: it sets no origin key, does not set `enabled=` to a
-  true value, and sets no `proxy=` or disabled `sslverify=`. A `[*]` drop-in
+  true value, sets no `proxy=`, and disables neither `sslverify=` nor any
+  signature check (`gpgcheck=`, `pkg_gpgcheck=`, `repo_gpgcheck=`; no
+  `[repositories.security]` approval applies to a glob). A `[*]` drop-in
   that sets only `priority=` or `enabled=0` passes.
 
 ## Printing and scanning gaps

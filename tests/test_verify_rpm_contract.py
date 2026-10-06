@@ -629,13 +629,14 @@ class ResolvedContractTests(unittest.TestCase):
                 return result, []
 
             report_dir = Path(tempfile.mkdtemp())
-            # /etc/yum.repos.d is real on Fedora hosts. The resolved contract
-            # tests don't care about it, so redirect it to a guaranteed-empty
-            # temp directory (#454 on-image scan).
+            # /etc/yum.repos.d and /etc/dnf/repos.override.d are real on Fedora
+            # hosts. The resolved contract tests don't care about them, so
+            # redirect them away (#454, #524 on-image scan).
             runtime_repos = [Path(tempfile.mkdtemp())]
             with patch.object(self.module, "Path", redirected), \
                     patch.object(self.module, "runtime_reposdir_paths",
                                  lambda: list(runtime_repos)), \
+                    patch.object(self.module, "OVERRIDE_REPOS_DIRS", ()), \
                     patch.object(self.module, "is_installed",
                                  side_effect=lambda p: p in installed), \
                     patch.object(self.module, "query_packages", side_effect=fake_query), \
