@@ -61,6 +61,12 @@ opaque `exit status 71` from the image build (comment,
 - `just check-repos` -- the complete installation transaction against the
   digest-pinned base and package repository, including extension build tools.
 
+Host-side unit tests in this gate must be wall-clock independent: a loaded
+runner can take over a second between setup and assertion, so any test that
+renders relative times freezes the clock in the harness (the `ago()` site
+test pins `Date.now`) rather than trusting setup-to-assert to stay within
+one unit.
+
 ### CI guard scripts and test coverage
 
 The fast gate relies on pure-verdict Python scripts under `scripts/` to halt

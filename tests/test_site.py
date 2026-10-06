@@ -254,8 +254,12 @@ class ScriptBehaviourTests(unittest.TestCase):
     def test_relative_times_use_the_unit_they_were_converted_into(self):
         cases = {30: "30s ago", 300: "5m ago", 10800: "3h ago",
                  172800: "2d ago", 1814400: "3w ago"}
+        # Freeze the clock: the runner can take over a second between
+        # capturing `now` and evaluating, which turns "30s ago" into
+        # "31s ago" on a loaded machine (Build Utah run 37467782811).
         script = """
         const now = Date.now();
+        Date.now = () => now;
         const at = (s) => new Date(now - s * 1000).toISOString();
         console.log(JSON.stringify(%s.map((s) => ago(at(s)))));
         """ % list(cases)
