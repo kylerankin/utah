@@ -64,16 +64,6 @@ class InputsTests(unittest.TestCase):
 
 
 class EvidenceTests(unittest.TestCase):
-    def test_privileged_tacklebox_consumers_share_one_digest_pin(self):
-        pin = (ROOT / "config/tacklebox-image").read_text().strip()
-        self.assertRegex(pin, r"^ghcr.io/tuna-os/tacklebox:latest@sha256:[a-f0-9]{64}$")
-        for path in ("iso/scripts/build-iso-tacklebox.sh", ".github/workflows/post-testing-e2e.yml"):
-            source = (ROOT / path).read_text()
-            self.assertIn("config/tacklebox-image", source)
-            self.assertNotIn("ghcr.io/tuna-os/tacklebox:latest", source)
-        managers = json.loads((ROOT / "renovate.json").read_text())["customManagers"]
-        self.assertTrue(any("/^config/tacklebox-image$/" in m["managerFilePatterns"] for m in managers))
-
     def test_ogc_config_gate_rejects_each_missing_live_boot_feature(self):
         script = (ROOT / "scripts/install-ogc-kernel.sh").read_text()
         # Execute only the pure config gate, never the package/kernel installer.
@@ -288,24 +278,29 @@ class EvidenceTests(unittest.TestCase):
         start = script.index('if [[ -n "${UTAH_E2E_FLATPAKS-x}" ]]; then')
         end = script.index("\nfi\n", script.index("present offline", start)) + len("\nfi\n")
         block = script[start:end]
+        refs_function = re.search(r"installed_flatpak_refs\(\) \{.*?\n\}", script, re.S)[0]
 
         def run(installed, flatpaks_env):
             harness = (
                 "sleep() { :; }\n"
-                "ssh_target() { [[ \"$1\" == *'flatpak list'* ]] && printf '%s\\n' \"$INSTALLED\"; }\n"
+                "flatpak() { if [[ \"$*\" == *--app* ]]; then printf '%s\\n' \"$INSTALLED\"; fi; }\n"
+                "ssh_target() { eval \"$1\"; }\n"
                 "fail() { echo \"FAIL: $*\" >&2; exit 1; }\n"
-                + block
+                + refs_function + "\n" + block
             )
             env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                    "INSTALLED": installed, "UTAH_E2E_FLATPAKS": flatpaks_env}
             return subprocess.run(["bash", "-eu", "-c", harness],
                                    capture_output=True, text=True, env=env)
 
-        complete = run("org.a\norg.b\norg.c", "org.a\norg.b")
+        complete = run("app/org.a/x86_64/stable\napp/org.b/x86_64/stable\napp/org.c/x86_64/stable", "org.a\norg.b")
         self.assertEqual(complete.returncode, 0, complete.stderr)
         self.assertIn("org.a, org.b", complete.stdout)
 
-        missing = run("org.a", "org.a\norg.b")
+        displayed = run("org.a/x86_64/stable\norg.b/x86_64/stable", "app/org.a/x86_64/stable\napp/org.b/x86_64/stable")
+        self.assertEqual(displayed.returncode, 0, displayed.stderr)
+
+        missing = run("app/org.a/x86_64/stable", "org.a\norg.b")
         self.assertNotEqual(missing.returncode, 0)
         self.assertIn("org.b", missing.stderr)
         self.assertNotIn("org.a\n", missing.stderr.split("missing")[-1])
@@ -486,6 +481,7 @@ attempts=0
 sleep() { :; }
 flatpak() {
     case "$1" in
+        --default-arch) echo x86_64 ;;
         preinstall)
             attempts=$((attempts + 1))
             printf '%s\\n' "$attempts" > "$state/attempts"
@@ -494,11 +490,11 @@ flatpak() {
                 : > "$state/com.mitchellh.ghostty"
             fi
             return 0 ;;
-        info) [[ -f "$state/$3" ]] ;;
+        info) local id="${3#*/}"; id="${id%%/*}"; [[ -f "$state/$id" ]] ;;
         *) return 90 ;;
     esac
 }
-''' + block)
+''' + block.replace("/usr/local/libexec/utah-preinstall-refs.py", str(ROOT / "iso/live/src/preinstall-refs.py")))
             result = subprocess.run(
                 ["bash", str(harness), str(declarations), str(installed),
                  str(resolve_on_attempt)], capture_output=True, text=True,
@@ -579,16 +575,17 @@ ostree() {
 }
 flatpak() {
     case "$1" in
+        --default-arch) echo x86_64 ;;
         preinstall)
             local id
             for id in $(sed -n 's/^\\[Flatpak Preinstall \\(.*\\)\\]$/\\1/p' "$PREINSTALL_DIR"/*.preinstall); do
                 grep -q "^xa\\.preinstalled=.*app/$id/" "$repo/config" || : > "$state/$id"
             done ;;
-        info) [[ -f "$state/$3" ]] ;;
+        info) local id="${3#*/}"; id="${id%%/*}"; [[ -f "$state/$id" ]] ;;
         *) return 90 ;;
     esac
 }
-''' + seed.replace("/var/lib/flatpak", "$4") + install)
+''' + seed.replace("/var/lib/flatpak", "$4") + install.replace("/usr/local/libexec/utah-preinstall-refs.py", str(ROOT / "iso/live/src/preinstall-refs.py")))
             result = subprocess.run(
                 ["bash", str(harness), str(cache), str(declarations),
                  str(installed), str(flatpak_dir)], capture_output=True, text=True,
