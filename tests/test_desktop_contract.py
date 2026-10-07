@@ -358,6 +358,14 @@ class GnomeExtensionTests(unittest.TestCase):
 
 
 class ServiceMaskParityTests(unittest.TestCase):
+    def test_stats_refresh_timer_enabled_in_contract_preset_and_script(self):
+        contract = (ROOT / "contracts/bluefin-desktop.toml").read_text()
+        preset = (ROOT / "system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset").read_text()
+        services = (ROOT / "scripts/configure-services.sh").read_text()
+        self.assertIn('"bluefin-stats-refresh.timer"', contract)
+        self.assertIn("enable bluefin-stats-refresh.timer", preset)
+        self.assertIn("enable_unit bluefin-stats-refresh.timer", services)
+
     def test_bootc_fetch_apply_updates_masked_and_disabled(self):
         preset = (ROOT / "system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset").read_text()
         self.assertIn("disable bootc-fetch-apply-updates.timer", preset)
