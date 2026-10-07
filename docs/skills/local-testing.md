@@ -220,8 +220,9 @@ asset (`digest` field of `gh api repos/tuna-os/bootc-installer/releases/tags/<ta
 or download and `sha256sum` it) rather than guessing or reusing an old value.
 
 The default Flatpaks are declared in the image's
-`/usr/share/flatpak/preinstall.d` and `/etc/flatpak/preinstall.d`, not in the ISO bake: `bazaar.preinstall`
-and `ghostty.preinstall` ship from `system_files`, and
+`/usr/share/flatpak/preinstall.d` and `/etc/flatpak/preinstall.d`, not in the
+ISO bake: `bazaar.preinstall` and `ghostty.preinstall` ship from
+`system_files`, and
 `scripts/configure-services.sh` generates `brewfile.preinstall` from the
 Bluefin Brewfile. `install-flatpaks.sh` only runs `flatpak preinstall`, so the
 ISO bakes exactly the declared set, and so does anything else that runs
@@ -240,9 +241,11 @@ TunaOS OCI remote, which has no `GPGKey`, every Flathub entry
 (`bazaar.preinstall` and the generated `brewfile.preinstall`) pins
 `CollectionID=org.flathub.Stable` so it resolves only from Flathub; the bake
 sets that collection ID on its `flathub` remote with `flatpak remote-modify`.
-Ghostty alone is collection-less, on TunaOS's `master` branch only.
-The TunaOS remote descriptor is vendored at
-`system_files/shared/etc/flatpak/remotes.d/tuna-os.flatpakrepo`, never fetched.
+Ghostty alone is collection-less, on TunaOS's `master` branch only. The
+TunaOS descriptor is vendored at
+`system_files/shared/etc/flatpak/remotes.d/tuna-os.flatpakrepo`, never fetched;
+it pins an OCI remote URL, not a GPG trust anchor, so content trust rests on
+TLS to the index and registry plus OCI digest verification.
 
 `flatpak preinstall` marks every ref it installs as preinstalled in
 `/var/lib/flatpak`, and fisherman copies that state onto disk, so the marks
@@ -250,22 +253,17 @@ survive into installed systems. Upstream then treats preinstall.d as the
 authoritative set: a marked ref that a later image no longer declares is
 uninstalled on the next `flatpak-preinstall.service` run. Dropping an app from
 the Brewfile (or from a `*.preinstall` file) therefore removes it from any
-system where that service runs, including copies users kept deliberately. That
-is intended flatpak semantics, and it is live wherever that service runs:
-Brewfile removals are user-visible uninstalls, not build-only changes.
+system where that service runs, including copies users kept deliberately:
+intended flatpak semantics, so Brewfile removals are user-visible uninstalls.
 
 Flatpak 1.19.0's [preinstall manual](https://github.com/flatpak/flatpak/blob/ec707cb43a0b332e4eea581d49bf9bb11f0dbd73/doc/flatpak-preinstall.xml)
 and [sync implementation](https://github.com/flatpak/flatpak/blob/ec707cb43a0b332e4eea581d49bf9bb11f0dbd73/common/flatpak-transaction.c)
-are the pinned references for this policy. A user who removes an already
-marked default is not forced to reinstall it while the declaration remains;
-`--reinstall` explicitly overrides that opt-out. A zero preinstall exit alone
-is not bake evidence: missing remote metadata can be warned about and skipped.
-The bake retries preinstall and the declared-set check together, and fails
-after five incomplete attempts. Validate the real path with a rootless live
-image build and then `just luks-test` on its debug ISO; PR image-only CI does
-not exercise the ISO bake. The vendored TunaOS descriptor pins an OCI remote
-URL, not a GPG trust anchor; content trust still depends on TLS to the index and registry, plus OCI digest
-verification; the URL pin is not a GPG signing key.
+are the pinned references for this policy. A user who removes a marked
+default is not forced to reinstall it while still declared; `--reinstall`
+overrides that opt-out. The bake retries preinstall and the declared-set check
+together, failing after five incomplete attempts. PR image-only CI does not
+exercise the bake: validate with a rootless live image build, then
+`just luks-test` on its debug ISO.
 
 ## Tacklebox ISOs (unpublished variants)
 
@@ -402,6 +400,19 @@ baseline digest.
 Phase-keyed diagnostics (`evidence/lifecycle-*.json`, `lifecycle-summary.json`)
 and screendumps identify the active deployment and digest at every phase.
 
+After each lifecycle phase the harness captures the BLS Type #1 entries under
+`/boot/loader/entries/` (and `/boot/efi/loader/entries/` if present) and runs
+`validate-bootmgr` on them, catching an `ostree-finalize-staged` regression
+where `bootc status` reports a queued deployment the boot manager cannot chain
+to. The validator parses `ostree=/ostree/boot.N/<stateroot>/<bootcsum>/<serial>`
+from each entry's `options` line and requires, per `(stateroot, deploy_serial)`
+group, at least as many entries as deployments; serial alone collides (ostree
+allocates `deployserial` per `(osname, commit)`, so two new commits both get 0).
+`<bootcsum>` is the kernel+initramfs layout hash, not `ostree.checksum`, and is
+not a match key. Phases 3 and 4 check both `booted` and `rollback` slots; each
+matched entry needs `linux` plus `initrd` or `options`. Evidence goes to
+`evidence/loader-entries-<phase>.txt` and `evidence/bootmgr-<phase>.json`.
+
 Each phase also runs `iso/scripts/verify-boot-files.sh` as root in the guest
 and saves `evidence/boot-files-<phase>.txt`. For every published OSTree BLS
 Type #1 entry, `linux` and every repeated `initrd` directive must reference a
@@ -478,17 +489,11 @@ just iso testing
 just boot-iso    # success: live session renders; serial shows UTAH_LIVE_READY
 ```
 
-The effective-ref parser follows the pinned Flatpak implementation: read sorted
-vendor files, then sorted administrator files; merge each group by app ID,
-retaining omitted keys. Honor `Install=false`, branch and runtime type, and
-verify complete refs in the bake and installed guest. Same filenames do not
-mask a whole file in this implementation.
-
-Installed-guest file copies require the installed SSH port and test-user
-password, using SCP's uppercase `-P`. Exercise that helper after merging
-harness changes; a missing function can otherwise fail only after installation.
-
-Installed Flatpak `--columns=ref` output omits the app/runtime namespace. Query
-apps and runtimes separately and restore each prefix before comparing canonical
-preinstall refs; an ID-only check cannot verify branch, architecture, or kind.
-Exercise the actual formatter with the displayed three-component output.
+The effective-ref parser (`iso/live/src/preinstall-refs.py`) follows the pinned
+Flatpak implementation: sorted vendor files, then sorted administrator files,
+merged by app ID retaining omitted keys; same filenames do not mask a whole
+file. It honors `Install=false`, branch, and runtime type. Installed
+`--columns=ref` output omits the app/runtime namespace, so the guest check
+queries apps and runtimes separately and restores each prefix before comparing
+complete refs. Installed-guest file copies need the installed SSH port and
+test-user password, using SCP's uppercase `-P`.

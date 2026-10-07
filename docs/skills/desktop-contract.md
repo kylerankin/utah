@@ -477,7 +477,3 @@ python3 scripts/verify-desktop-contract.py --check contracts/bluefin-desktop.tom
 python3 scripts/verify-gnome-extensions.py --source
 just check-desktop-contract localhost/utah:testing  # requires a locally built image
 ```
-
-After resolving skill metadata during a branch merge, regenerate and stage the
-catalog before committing. Passing a check against a regenerated working tree
-does not establish that the committed catalog matches that metadata.
