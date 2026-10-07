@@ -284,12 +284,6 @@ to finish and still requires a successful conclusion before reading artifacts.
 wrong branches/workflows, mutable references, conflicting digests, and missing
 flavors. The expected set comes from `scripts/flavors.py images`.
 
-The privileged tacklebox builder and verifier both read `config/tacklebox-image`,
-a single digest pin tracked by Renovate. Both reject a mutable tag before
-running the container. Updating only the builder default leaves verification
-executing unrelated code with root privileges; keep both consumers on this
-same file.
-
 Each configured image is pulled by digest, composed into a disposable debug
 ISO, and passed to the existing `iso/scripts/luks-e2e.sh`. Both guests have
 restricted networking. CI requires KVM, PNG screenshots, and OCR evidence
@@ -359,6 +353,15 @@ the ISO is written. Successful post-fix E2E run `35469913325` measured 3.9G
 headroom for the largest flavor. The guard lives in the build script, so it
 holds for every caller (local `just iso`, the CI LUKS job, and any deliberate
 rerun), not just one workflow.
+
+### Tacklebox image pin
+
+The privileged tacklebox builder (`iso/scripts/build-iso-tacklebox.sh`) and
+the tacklebox ISO verifier step in `post-testing-e2e.yml` both read
+`config/tacklebox-image`, a single digest pin tracked by Renovate. Both reject
+a mutable tag before running the container. Updating only the builder default
+leaves verification executing unrelated code with root privileges; keep both
+consumers on this same file.
 
 ## Release and branch cadence, and the factory pin
 
