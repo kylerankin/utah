@@ -919,7 +919,6 @@ graphical target. This is what proves the boot did not stop at a console.
 
 \`${TEST_USER}\`'s GNOME session, entered by typing the password at the
 greeter above.
-
 EOF
     echo "Verification record: ${DOCS}/README.md"
 
