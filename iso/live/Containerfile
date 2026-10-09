@@ -11,23 +11,29 @@ ARG TARGET_IMAGE=ghcr.io/projectbluefin/utah:testing
 ARG DEBUG=0
 ENV TARGET_IMAGE=${TARGET_IMAGE} DEBUG=${DEBUG}
 
-# Utah already carries dracut-live; systemd-boot is added only to the live
-# environment because the installed image uses the Hummingbird bootloader.
+# Utah already carries dracut-live, and since #363 the base image installs
+# systemd-boot-unsigned so systemd-boot installs can update their own ESP, so
+# the live overlay inherits the boot manager the ISO is assembled with.
 #
 # dbus-daemon is for the build itself: install-flatpaks.sh starts a system bus
 # so flatpak can install into /var/lib, and Utah carries dbus-broker rather
 # than the reference daemon, so /usr/bin/dbus-daemon is not there. The package
 # is small and never leaves the live overlay.
 RUN dnf5 install -y --setopt=install_weak_deps=False \
-        systemd-boot-unsigned dbus-daemon && \
+        dbus-daemon && \
     dnf5 clean all && rm -rf /var/cache/dnf /var/cache/libdnf5
 
 # Bake the installer plus precisely the Flatpaks declared by the Bluefin
 # Brewfile into the squashfs. The cache is only a build accelerator; /var/lib
 # is committed into the live image and copied to the installed target offline.
 COPY src/install-flatpaks.sh /usr/local/libexec/utah-install-live-flatpaks
+# The shipped image strips build-time scripts (clean-stage), and this stage is
+# FROM that image -- so ship the Flatpak parser in the overlay itself, staged
+# into the build context by build-iso.sh. Same single parser the desktop
+# contract and luks-e2e use; it also stays on the live system for the guest.
+COPY --chmod=0755 src/utah-verify-desktop-contract.py /usr/local/libexec/utah-verify-desktop-contract
 RUN --mount=type=cache,target=/var/cache/flatpak-dl,id=utah-flatpak \
-    awk -F '"' '/^flatpak / {print $2}' /usr/share/ublue-os/homebrew/system-flatpaks.Brewfile > /tmp/flatpaks-list && \
+    /usr/local/libexec/utah-verify-desktop-contract --flatpaks /usr/share/ublue-os/homebrew/system-flatpaks.Brewfile > /tmp/flatpaks-list && \
     chmod 0755 /usr/local/libexec/utah-install-live-flatpaks && \
     /usr/local/libexec/utah-install-live-flatpaks
 

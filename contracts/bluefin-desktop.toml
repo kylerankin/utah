@@ -6,6 +6,9 @@
 [branding]
 files = [
   "/usr/share/ublue-os/bluefin-logos/bluefin.png",
+  "/usr/share/pixmaps/bluefin-gdm-logo.png",
+  # The os-release LOGO icon; common ships Bluefin's raptor under this name.
+  "/usr/share/pixmaps/fedora-logo-icon.png",
   "/usr/share/ublue-os/bluefin-logos/chicken.png",
   "/usr/share/ublue-os/bluefin-logos/symbols/bluefin",
   "/usr/share/backgrounds/bluefin/01-bluefin.xml",
@@ -13,13 +16,14 @@ files = [
   "/usr/share/glib-2.0/schemas/zz0-bluefin-modifications.gschema.override",
   "/usr/share/ublue-os/fastfetch-user-count",
   "/usr/share/ublue-os/bazaar-install-count",
+  "/usr/bin/chairlift-helper",
+  "/usr/share/polkit-1/actions/io.projectbluefin.chairlift.ublue.policy",
 ]
 
 [branding.os_release]
 NAME = "Utah"
-ID = "utah"
+ID = "hummingbird"
 ID_LIKE = "fedora"
-CPE_NAME = "cpe:/o:universal-blue:utah"
 HOME_URL = "https://projectbluefin.io"
 DOCUMENTATION_URL = "https://docs.projectbluefin.io"
 SUPPORT_URL = "https://github.com/projectbluefin/utah/issues/"
@@ -27,11 +31,16 @@ BUG_REPORT_URL = "https://github.com/projectbluefin/utah/issues/"
 DEFAULT_HOSTNAME = "utah"
 VERSION_CODENAME = "Utahraptor"
 IMAGE_ID = "utah"
+LOGO = "fedora-logo-icon"
 
 [branding.os_release_patterns]
 PRETTY_NAME = '^Utah \(Version: .+\)$'
 VERSION = '^.+ \(Hummingbird\)$'
 VARIANT_ID = '^utah(-.*)?$'
+# ID, VERSION_ID and CPE_NAME are left at the Hummingbird base values so CVE
+# scanners still recognise the image as Hummingbird-based; this pattern asserts
+# the base CPE identity survives rather than pinning a per-release CPE string.
+CPE_NAME = '^cpe:/a:redhat:hummingbird:\d+$'
 OSTREE_VERSION = '^.+$'
 IMAGE_VERSION = '^.+$'
 BUILD_ID = '^.+$'
@@ -54,6 +63,17 @@ files = [
   "/etc/dconf/db/distro.d/03-bluefin-ptyxis-palette",
   "/etc/dconf/db/distro.d/04-bluefin-custom-command-menu",
   "/etc/dconf/db/distro.d/locks/01-bluefin-locked-settings",
+  # GDM greeter logo. GDM uses its own "gdm" dconf profile (provided by the
+  # gdm RPM at /etc/dconf/profile/gdm); without this keyfile gnome-shell
+  # falls back to /usr/share/pixmaps/fedora-gdm-logo.png from fedora-logos,
+  # and the login screen shows the Fedora wordmark instead of Bluefin (#378).
+  "/etc/dconf/db/gdm.d/01-bluefin-gdm-logo",
+  # systemd-remount-fs.service.d/10-utah-composefs-skip.conf. On the composefs
+  # image / is mounted read-only and the upstream unit unconditionally tries
+  # to remount it read-write, fails with "overlay: No changes allowed in
+  # reconfigure", and degrades the boot. The drop-in adds ConditionPathIsReadWrite=/
+  # so the unit is skipped, not failed. #585.
+  "/usr/lib/systemd/system/systemd-remount-fs.service.d/10-utah-composefs-skip.conf",
 ]
 
 [configuration.file_contains]
@@ -68,6 +88,21 @@ files = [
 "/etc/dconf/db/distro.d/02-bluefin-keybindings" = [
   "xdg-terminal-exec",
 ]
+# The login screen logo must point at the Bluefin mark. Asserting both the
+# schema and the asset path guards against reverting to the Fedora fallback
+# or to the full-size bluefin.png, which renders far too large. The path must
+# be the small wordmark that [branding].files asserts is shipped. See #378.
+"/etc/dconf/db/gdm.d/01-bluefin-gdm-logo" = [
+  "[org/gnome/login-screen]",
+  "logo='/usr/share/pixmaps/bluefin-gdm-logo.png'",
+]
+# Composefs mounts / read-only, so systemd-remount-fs.service must be
+# conditional on / being writable; otherwise it fails on every boot and
+# degrades the system. The drop-in ships the condition -- assert the line so
+# a refactor that drops it fails the build rather than the boot (#585).
+"/usr/lib/systemd/system/systemd-remount-fs.service.d/10-utah-composefs-skip.conf" = [
+  "ConditionPathIsReadWrite=/",
+]
 
 [flatpak]
 files = [
@@ -75,6 +110,11 @@ files = [
   "/usr/share/flatpak/preinstall.d/bazaar.preinstall",
   "/usr/share/ublue-os/privileged-setup.hooks.d/99-flatpaks.sh",
   "/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+  # Common's `system_files/bluefin/` profile supplies the Firefox preference
+  # file the `99-flatpaks.sh` hook copies at first boot; assert the actual
+  # payload rather than the COPY line so a missing Common payload fails
+  # image verification. See issue #488.
+  "/usr/share/ublue-os/firefox-config/01-bluefin-global.js",
 ]
 brewfile = "/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile"
 remote = "/etc/flatpak/remotes.d/flathub.flatpakrepo"
@@ -86,11 +126,9 @@ apps = [
   "com.mattjakeman.ExtensionManager",
   "com.ranfdev.DistroShelf",
   "io.github.flattool.Ignition",
-  "io.github.flattool.Warehouse",
   "io.github.kolunmi.Bazaar",
   "io.gitlab.adhami3310.Impression",
   "io.missioncenter.MissionCenter",
-  "it.mijorus.smile",
   "org.gnome.Calculator",
   "org.gnome.Calendar",
   "org.gnome.Characters",
@@ -130,6 +168,8 @@ apps = [
 
 [services]
 enabled = [
+  "avahi-daemon.service",
+  "avahi-daemon.socket",
   "bluetooth.service",
   "bootc-unified-storage.service",
   "brew-setup.service",
@@ -139,9 +179,12 @@ enabled = [
   "flatpak-preinstall.service",
   "gdm.service",
   "input-remapper.service",
+  "bluefin-stats-refresh.timer",
   "ModemManager.service",
+  "switcheroo-control.service",
   "ublue-system-setup.service",
   "uupd.timer",
+  "systemd-boot-update.service",
 ]
 # Per-user services, checked with `systemctl --global is-enabled`. Hummingbird's
 # user preset disables everything but dbus; without these an installed Utah had

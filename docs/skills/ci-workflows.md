@@ -1,7 +1,7 @@
 ---
 name: ci-workflows
-version: "1.0"
-last_updated: "2026-09-19"
+version: "1.1"
+last_updated: "2026-10-02"
 id: ci-workflows
 one_line_purpose: Navigate Utah's build, promote, and sync workflow topology.
 entry_point: docs/skills/ci-workflows.md
@@ -13,25 +13,65 @@ dependencies: []
 tags: [ci, workflows, actions, promotion]
 description: >-
   build.yml contract gate, kernel-cache job, main/kernel matrix split,
-  promote-testing-to-main and sync-main-to-testing, actions@v1 delegation.
-  Use when changing .github/workflows/ or debugging a red run.
+  promote-testing-to-main, sync-main-to-testing and update-bluefin-parity,
+  actions@v1 delegation, Renovate factory pin. Use when changing
+  .github/workflows/ or debugging a red run.
 metadata:
   type: reference
 ---
 
 # CI Workflows
 
-Three workflows, all thin callers into `projectbluefin/actions@v1` reusables,
-each pinned to a SHA tagged `v1`:
+This overview covers the build, promotion, branch-sync, parity-sync, and
+post-build verification workflows, not the complete workflow inventory:
 
 - `.github/workflows/build.yml` -- pull requests, pushes to `testing`, a
   manual dispatch. Top-level `permissions: {}`; each job
-  grants its own. Cancels in-progress runs per workflow and ref.
+  grants its own. Cancels in-progress runs per workflow and ref. A dispatch
+  with `contract_only=true` runs only the `contract` job and skips
+  `kernel_cache`, `build_main`, `build_kernel` and `dispatch-iso`, so nothing
+  is built, pushed, signed or sent to Post-Testing E2E, even on `testing`.
 - `.github/workflows/promote-testing-to-main.yml` -- pushes to `testing`, a
   nightly cron, and manual dispatch.
 - `.github/workflows/sync-main-to-testing.yml` -- source pushes to `main`,
   nightly cron, and manual dispatch; explicitly dispatches the testing build
   after syncing. Token-authenticated branch pushes alone do not start CI.
+- `.github/workflows/update-bluefin-parity.yml` -- nightly and manual
+  dispatch. It resolves Bluefin `main` and uses one fixed branch,
+  `automation/bluefin-parity`, so `create-pull-request` updates the existing
+  review rather than opening duplicates. It does not auto-merge. That branch is
+  disposable: `create-pull-request` rebuilds it from `main` plus the generated
+  changes each run and force-resets it when the result differs, so a commit
+  pushed onto the open bump PR is discarded at the next run. Overlay fixes the
+  bump needs go in their own pull request against `main`, not onto the bump
+  branch; see `package-contract.md`. Before
+  proposing, it reruns `scripts/generate-site-data.py` and
+  `scripts/check-doc-counts.py --write`, so the bump carries the new
+  `site/data/packages.json` and the README / `package-contract.md` counts
+  that `just check` compares against the manifests. The generator is passed
+  `--generated-at` with the upstream commit date rather than defaulting to
+  today, so an unchanged upstream ref regenerates byte-identical files and
+  `create-pull-request` leaves the open bump branch alone.
+  The proposal action runs even when upstream equals `main`: it must see the
+  empty diff to close a previously opened bump after an upstream reversion.
+  Its body file is created on both paths, while explicit CI dispatch remains
+  restricted to `created`/`updated` proposals.
+
+  The bump PR would otherwise arrive with **no checks**: GitHub does not
+  start `on: pull_request` workflows for pull requests created with the
+  default `GITHUB_TOKEN`. The workflow's last step dispatches
+  `gh workflow run build.yml --ref automation/bluefin-parity -f
+  contract_only=true` right after `create-pull-request` runs, so the run
+  attaches to the branch head, which is the PR head, and
+  `check`/`check-parity`/`check-repos` report on the bump PR itself. It is
+  contract-only on purpose: a dispatch is not a `pull_request` event, so a
+  full build would push and sign `testing` images from an upstream package
+  set no maintainer has reviewed yet. The images are built when the merged
+  change reaches `testing`. Needs `actions: write`, which the job holds.
+  Gated on `create-pull-request`'s own `pull-request-operation` output being
+  `created` or `updated` (not on the parity diff alone), so a nightly run
+  against an unmerged, unchanged bump branch does not re-dispatch for
+  nothing.
 - `.github/workflows/post-testing-e2e.yml` -- successful non-PR testing builds
   explicitly dispatch this, or manually supply a successful testing build run ID.
 
@@ -56,11 +96,28 @@ opaque `exit status 71` from the image build (comment,
   (`scripts/check-script-syntax.py`), host-side unit tests (`just test`),
   and the ban on flavor literals in workflows.
 - `just check-parity` -- `packages/bluefin.toml` against Bluefin's upstream
-  pinned at `packages/.bluefin-parity-ref`.
+  pinned at `packages/.bluefin-parity-ref`; the nightly parity workflow opens
+  a dedicated review when Bluefin `main` changes it.
 - `just check-repos` -- the complete installation transaction against the
   digest-pinned base and package repository, including extension build tools.
 
+Host-side unit tests in this gate must be wall-clock independent: a loaded
+runner can take over a second between setup and assertion, so any test that
+renders relative times freezes the clock in the harness (the `ago()` site
+test pins `Date.now`) rather than trusting setup-to-assert to stay within
+one unit.
+
 ### CI guard scripts and test coverage
+
+The front-matter description budget measures the content after stripping the
+leading YAML block indicator (`>`, `|`, and their chomping modifiers). Cover
+both 256 and 257 characters for each indicator so a folded description cannot
+fail because the checker counts YAML syntax. `.github/actionlint.yaml` admits
+the GitHub-hosted `ubuntu-26.04` label while the pinned actionlint predates it;
+all other labels remain checked. Remove that compatibility entry when a newer
+actionlint release recognizes the label.
+
+
 
 The fast gate relies on pure-verdict Python scripts under `scripts/` to halt
 the build before expensive compilation or container builds run:
@@ -74,7 +131,17 @@ the build before expensive compilation or container builds run:
   run is one command) or within the ten lines that follow it, must be code
   rather than comment text, and a bare `--check` never clears on its own --
   `sha256sum --check` clears through `sha256sum`. Flathub descriptor
-  downloads (`flathub.flatpakrepo`, `appstream`) and comment lines are exempt.
+  downloads (`flathub.flatpakrepo`, `appstream`) and comment lines are exempt
+  from the extension heuristic only; `scripts/configure-services.sh` still
+  pins `flathub.flatpakrepo` by sha256, because the descriptor carries the
+  `Url=` and `GPGKey=` every Flatpak on the image is verified against.
+  Verify the trust behavior by running `configure-services.sh` in a disposable
+  image: a matching descriptor must install unchanged, while a hash mismatch
+  must exit nonzero without replacing an existing remote. Source ordering or
+  string assertions do not prove that rejection path.
+  `tests/test_flathub_descriptor.py` runs the whole script against scratch
+  filesystem roots and a committed descriptor fixture, with real hashing and
+  installation. It covers matching bytes and rejection without remote replacement.
   Scanning is per *logical* line: backslash continuations are joined before
   matching, so a `curl` whose URL sits on a continuation line is still inspected
   and is reported at the line the command starts on. Matching raw lines instead
@@ -100,24 +167,60 @@ loudly there, because an invalid matrix creates no image job at all and the
 only symptom is `build_container: failure` from the aggregator (comment,
 `.github/workflows/build.yml`).
 
-## kernel_cache: skipped unless needed, skipped when published
+## kernel_cache: skipped unless needed, reused only when signed
 
 The kernel cache job runs only when `needs_kernel` is `true` -- while the
 matrix is main-only, building it is 45 minutes spent on an image nothing
 consumes (comment, `.github/workflows/build.yml`). When it does run, it
 frees runner disk, logs in to GHCR with `GITHUB_TOKEN`, and probes the
-content-hash tag with `podman pull`: a tag that is already published is a
-cache hit and the job exits without building; only a miss builds
-`Containerfile.kernel` and pushes (step "Build the kernel cache image if it
-is not published yet", `.github/workflows/build.yml`). What the tag hashes
+content-hash tag with `podman pull`. A published tag is a cache hit only if
+its digest verifies; unsigned or wrongly signed hits are rebuilt from the
+checkout, pushed, signed and verified just like misses. What the tag hashes
 and why lives in [kernel-cache.md](kernel-cache.md).
+
+A published tag is adopted only when its signature verifies; a miss is
+pushed, signed, and verified before the job calls itself done. Two
+boundaries decide whether that can work (job `env:` and the same step):
+
+- podman and cosign must share one credential store. `podman login` by
+  default writes `${XDG_RUNTIME_DIR}/containers/auth.json`, which cosign
+  never reads -- it uses the Docker keychain at
+  `${DOCKER_CONFIG}/config.json`. The job points both `DOCKER_CONFIG` and
+  `REGISTRY_AUTH_FILE` at one `${RUNNER_TEMP}/utah-registry/config.json`,
+  outside the image build context, and removes it in an always-run step.
+  The image push and signature upload then authenticate with the same token;
+  without it the push succeeds and `cosign sign` fails UNAUTHORIZED (#316).
+- the signed digest must be the one the registry stored. After a push,
+  `podman image inspect ... RepoDigests` reports the *local* manifest
+  digest, which differs from the registry's, so the job signs the digest
+  `podman push --digestfile` reports instead. The cache-hit path needs no
+  such care: there the inspect runs after `podman pull`, which records the
+  registry digest.
+
+`cosign verify` pins the issuer and the identity to this exact workflow in
+this repo, then accepts any `refs/heads/*` or `refs/pull/N/merge` ref. A
+manual `workflow_dispatch` signs with `refs/heads/<branch>` -- and the
+Actions UI defaults to the default branch -- so a regexp naming only
+`testing` made a dispatched run sign the image and then fail its own
+verify. Everyone who can dispatch this workflow can already sign from an
+arbitrary branch via a same-repo pull request, so accepting branch heads
+widens nothing (#316).
+
+The consumer (`build-ghcr`) also fails closed: CI downloads cosign v2.6.1
+with the platform SHA-256 pinned by `sigstore/cosign-installer@7e8b541e…`,
+outside the context under `${RUNNER_TEMP}/utah-tools`, and invokes its absolute
+path because the reusable builder uses `sudo` with `secure_path`. Local kernel
+builds require cosign on PATH. The tag is resolved once through `skopeo`, the
+same issuer/ref regexp verifies the resulting immutable digest, and only that
+digest reaches `BASE_IMAGE`. Registry credentials use a private temporary
+Docker keychain outside the checkout and are removed at recipe exit.
 
 ## The build matrix calls reusable-build.yml twice
 
 `build_main` needs only `contract`, so `main` starts the moment the gate
 passes; `build_kernel` needs `contract` and `kernel_cache`, so a cache miss
 holds up only the flavors that consume it. Both call
-`reusable-build.yml@4f6c41ff0a16a224f5e54ae80d7affbe2409b3d0 # v1`, and
+`reusable-build.yml@ae7d740d261d56354aeaf0a72af6f87e442e0472 # v1`, and
 `just check` asserts that pin with
 `grep -qE 'reusable-build\.yml@(v1|[0-9a-f]{40} # v1)$' .github/workflows/build.yml`
 (recipe, `Justfile`, `check`). Both pass `publish_stream_tag: "false"` --
@@ -126,7 +229,7 @@ testing is advanced only after post-testing-e2e validates the build
 opt the testing stream into rechunking and build SBOMs, which
 reusable-build skips by default. That opt-in requires the reusable
 workflow's `rechunk` input added in projectbluefin/actions#557 (which
-4f6c41ff0a16a224f5e54ae80d7affbe2409b3d0 includes); `workflow_call` validates
+ae7d740d261d56354aeaf0a72af6f87e442e0472 includes); `workflow_call` validates
 the caller's `with:` against the declared inputs.
 
 The two calls carry different `brand_name` values on purpose. The reusable
@@ -251,9 +354,56 @@ headroom for the largest flavor. The guard lives in the build script, so it
 holds for every caller (local `just iso`, the CI LUKS job, and any deliberate
 rerun), not just one workflow.
 
+## Release and branch cadence, and the factory pin
+
+The cadence is RFC'd in #336. What runs today:
+
+- Open pull requests against `main`, never `testing`. `sync-main-to-testing.yml`
+  resets `testing` to `main` on every push to `main` and again nightly on its
+  own `20 22 * * *` schedule, so a commit merged straight into `testing` is
+  orphaned: #404 was lost this way and had to be re-landed. `build.yml` runs on
+  every pull request and declares `push: branches: [testing]`, but that trigger
+  is not how a `main` commit reaches the image tags: the sync pushes `testing`
+  with the workflow's own `GITHUB_TOKEN`, and a `GITHUB_TOKEN` push starts no
+  workflow. `sync-main-to-testing.yml`'s `build` job therefore dispatches the
+  build explicitly (`gh workflow run build.yml --ref testing`) once the sync
+  job returns, which is the path that actually produces the images.
+- `:testing` advances per green build, not on a clock: the tags move in
+  `post-testing-e2e.yml`, after the LUKS ISO matrix and the production-ISO
+  composition both pass. `promote-testing-to-main.yml` is the daily 04:00 UTC
+  heartbeat, so `:testing` is at most a day behind `main` and `main` is at
+  most a day behind the newest validated `testing` image.
+- `:stable` moves in `execute-release.yml` on every promotion push to `main`,
+  gated by `run_release_gate: true` over `smoke,common`. A weekly promotion
+  rather than a per-promotion one is still an open question in #336 -- that is
+  a maintainer policy call, not a code gap, and nothing in this tree should
+  encode a guess at it.
+
+`ARG PACKAGE_IMAGE_SHA` is the digest of `ghcr.io/projectbluefin/utah-packages`,
+the RPM repository every image installs from. The built-in Dockerfile manager
+does not discover this ARG indirection, so Utah's local regex manager reads
+both that pin and `packages/utah-packages.repo`'s `# factory-pin:` stamp as
+occurrences of one Docker dependency tracking `latest`.
+
+Digest updates are grouped into one Renovate PR. Both occurrences must change
+to the same digest: the stamp invalidates the package transaction's layer
+cache, while the ARG selects the repository and labels its provenance. The
+existing equality and full transaction checks remain the adoption gates.
+
+The extraction and real replacement were exercised with Renovate 44.132.2;
+the inherited local preset is `config:recommended`. This replaces the separate
+scheduled factory updater rather than running two bots over the same pins.
+No `image-versions.yml` alias or second literal pin is introduced. Renovate's
+PR event runs normal CI; every update still requires independent review.
+
+
 ## Verification
 
 ```bash
 just check
 ~/.local/bin/pre-commit run actionlint --all-files
 ```
+
+Front-matter presence checks feed `grep -q` with a here-string. With
+`pipefail`, an early reader exit can make a successful matching pipeline
+look unsuccessful when its writer receives SIGPIPE.

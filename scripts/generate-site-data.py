@@ -100,12 +100,12 @@ def unavailable_reasons(overlay: Path) -> dict[str, list[int]]:
                 reasons.setdefault(name, [])
         elif current:
             # Only the explicit "Tracked by" clause counts. The prose also
-            # cites neighbouring issues to draw comparisons -- ppp's entry
-            # names avahi's #104 and nautilus's #100 while being tracked by
-            # #107 -- and scraping every "#123" in the paragraph attributed
-            # all three to ppp. Cross-repository references carry their repo
-            # (utah-packages#112) and are left out: these numbers are rendered
-            # as links into this repository.
+            # cites neighbouring issues to draw comparisons --
+            # grub2-efi-x64-cdboot's entry names utah-packages#238 while being
+            # tracked by #253 -- and scraping every "#123" in the paragraph
+            # attributed both to the entry. Cross-repository references carry
+            # their repo (utah-packages#112) and are left out: these numbers
+            # are rendered as links into this repository.
             for clause in re.findall(r"[Tt]racked by ([^.]*)", body):
                 for number in re.findall(r"(?<![\w-])#(\d+)", clause):
                     for name in current:
@@ -114,7 +114,15 @@ def unavailable_reasons(overlay: Path) -> dict[str, list[int]]:
     return reasons
 
 
-def build(root: Path) -> dict:
+def _date(value: str) -> str:
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected YYYY-MM-DD, got {value!r}") from exc
+    return value
+
+
+def build(root: Path, generated_at: str | None = None) -> dict:
     installer = load_installer()
     base = root / "packages" / "bluefin.toml"
     overlay = root / "packages" / "utah.toml"
@@ -145,7 +153,7 @@ def build(root: Path) -> dict:
     })
 
     return {
-        "generated_at": datetime.now(UTC).strftime("%Y-%m-%d"),
+        "generated_at": generated_at or datetime.now(UTC).strftime("%Y-%m-%d"),
         "generator": "scripts/generate-site-data.py",
         "totals": {
             "installed": len(contract),
@@ -163,9 +171,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, default=ROOT / "site/data/packages.json")
     parser.add_argument("--check", action="store_true",
                         help="fail if the committed file differs from a fresh build")
+    parser.add_argument("--generated-at", type=_date,
+                        help="YYYY-MM-DD to record instead of today, so reruns on "
+                             "unchanged inputs produce identical output")
     args = parser.parse_args(argv)
 
-    data = build(ROOT)
+    data = build(ROOT, generated_at=args.generated_at)
     rendered = json.dumps(data, indent=2, sort_keys=True) + "\n"
 
     if args.check:

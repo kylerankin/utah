@@ -65,6 +65,10 @@ enable_unit flatpak-preinstall.service
 # bluez installed. Enable it next to the other desktop units; see #98.
 enable_unit gdm.service
 enable_unit bluetooth.service
+# Bluefin defaults for mDNS discovery and hybrid-GPU application launching.
+enable_unit avahi-daemon.service
+enable_unit avahi-daemon.socket
+enable_unit switcheroo-control.service
 enable_unit firewalld.service
 enable_unit fwupd.service
 enable_unit fwupd-refresh.timer
@@ -73,11 +77,16 @@ enable_unit tailscaled.service
 enable_unit uupd.timer
 enable_unit ublue-system-setup.service
 enable_unit systemd-resolved.service
+# See the preset: gated on systemd-boot by drop-in, skipped elsewhere (#363).
+enable_unit systemd-boot-update.service
 enable_unit bootc-unified-storage.service
 # input-remapper is installed by Bluefin's package set, but without its root
 # daemon running, udev autoload fails on input devices and the GUI prompts for
 # root credentials on launch. Enable it next to the desktop units; see #99.
 enable_unit input-remapper.service
+# Bluefin community stats refresh for fastfetch; enable next to the desktop
+# units so the timer fires on boot and every day. See #19.
+enable_unit bluefin-stats-refresh.timer
 enable_unit ModemManager.service
 # Printing on demand, as Fedora's preset enables it for Bluefin; Hummingbird's
 # 99-default-disable would leave it off.
@@ -87,10 +96,32 @@ enable_unit cups.path
 # Bluefin's Brewfile and Bazaar preinstall hook need the Flathub remote before
 # first boot. Keep this as a .flatpakrepo descriptor so the remote is available
 # to both flatpak-preinstall and brew-setup without baking mutable /var state.
+#
+# The descriptor is pinned like every other download in this build: it carries
+# Url= and GPGKey=, so it is the trust root every Flatpak on the image is
+# verified against, not merely a pointer to one. OSTree's signature check is
+# only as good as the key this file names. Flathub's key has not changed since
+# the repository opened, so a hash bump here means Flathub itself moved and the
+# new descriptor deserves a look before it ships.
+FLATHUB_REPO_SHA256=3371dd250e61d9e1633630073fefda153cd4426f72f4afa0c3373ae2e8fea03a
 install -d -m0755 /etc/flatpak/remotes.d
 curl --fail --retry 3 --silent --show-error \
-    --output /etc/flatpak/remotes.d/flathub.flatpakrepo \
+    --output /tmp/flathub.flatpakrepo \
     https://dl.flathub.org/repo/flathub.flatpakrepo
+echo "${FLATHUB_REPO_SHA256}  /tmp/flathub.flatpakrepo" | sha256sum --check --strict
+install -m0644 /tmp/flathub.flatpakrepo /etc/flatpak/remotes.d/flathub.flatpakrepo
+rm -f /tmp/flathub.flatpakrepo
+# The pinned descriptor carries no collection ID, but common's preinstall.d
+# entries pin CollectionID=org.flathub.Stable, and flatpak preinstall skips a
+# remote whose collection ID differs -- silently: "Nothing to do." and no
+# Bazaar. A remotes.d remote is applied to the repo once, at creation, so the
+# ID has to be in the descriptor before first boot. It is added after the
+# hash check above, which therefore still covers Flathub's bytes exactly.
+# Bluefin's remote-add'ed remote picks the ID up from Flathub's summary.
+grep -q '^DeployCollectionID=' /etc/flatpak/remotes.d/flathub.flatpakrepo ||
+    sed -i '/^\[Flatpak Repo\]$/a DeployCollectionID=org.flathub.Stable' \
+        /etc/flatpak/remotes.d/flathub.flatpakrepo
+grep -qx 'DeployCollectionID=org.flathub.Stable' /etc/flatpak/remotes.d/flathub.flatpakrepo
 
 disable_unit flatpak-add-fedora-repos.service
 
@@ -147,8 +178,10 @@ fi
 # these, and without them an installed Utah had no audio server at all. See
 # /usr/lib/systemd/user-preset/85-utah-desktop.preset; the desktop contract
 # asserts the result (services.user_enabled).
+# grub-boot-success.timer is deliberately absent: /boot is read-only at runtime
+# so the mark can never be written (see the user preset, #364).
 for unit in pipewire.socket pipewire-pulse.socket wireplumber.service \
-            xdg-user-dirs.service grub-boot-success.timer \
+            xdg-user-dirs.service \
             obex.service mpris-proxy.service; do
     if user_unit_exists "${unit}"; then
         systemctl --global enable "${unit}"

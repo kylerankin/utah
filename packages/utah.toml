@@ -10,29 +10,16 @@
 #   [parity]       what Bluefin gets from Fedora's base image and Hummingbird has
 #   [hardware]     device firmware the bootable base leaves out entirely
 #   [build]        toolchain needed to build the pinned GNOME extensions
-#   [unavailable]  Bluefin contract packages none of Utah's repositories provide
+#   [services]     desktop daemons enabled after the server base (cryptsetup, flatpak, fwupd, ...)
+#   [unavailable]  Bluefin parity gaps none of Utah's enabled repositories
+#                  provide -- from the copied base.toml contract or from the
+#                  published Bluefin image snapshot (baselines/bluefin/rpms.tsv)
 #
-# On [multimedia_overrides], which Utah deliberately does not install:
-#
-#   Those twelve entries -- mesa-libGL, mesa-vulkan-drivers, libva,
-#   intel-mediasdk, libheif and friends -- are not extra packages. They are the
-#   same package names Fedora already ships, which Bluefin *replaces* with
-#   negativo17 builds by enabling fedora-multimedia. Utah does not enable that
-#   repository, so it installs Fedora's builds of those names instead. Nothing
-#   is missing from the image; what differs is which build of them it carries,
-#   and the practical consequence is hardware-accelerated codec support.
-#
-#   This is why they are absent from the contract rather than listed under
-#   [unavailable]: [unavailable] means "no source provides this name at all",
-#   which is false of these. Recording them as missing would be wrong, and
-#   recording them as satisfied would hide a real functional difference from
-#   Bluefin.
-#
-#   The factory is already building several of them for Hummingbird --
-#   intel-gmmlib, intel-mediasdk, intel-vpl-gpu-rt, libheif and libva all built
-#   in projectbluefin/hummingbird-github. When that overlay is published and enabled
-#   here, it becomes the source that negativo17 is for Bluefin, and these can
-#   move into the contract as a version assertion rather than a name one.
+# Bluefin's [multimedia_overrides] selects replacement builds from negativo17.
+# Utah does not enable that repository or install that section wholesale.
+# Names in that section are not proof of installation on Hummingbird: the
+# Intel media packages must be requested explicitly in [parity] below (#383).
+# Matching package names does not establish codec parity with Bluefin.
 
 [gnome]
 # Hummingbird supplies the bootable base but not a desktop.  The pinned
@@ -78,6 +65,28 @@ packages = [
     "gnome-initial-setup",
 ]
 
+# Required major versions for the GNOME desktop contract packages above. The
+# supply-chain attestation (scripts/verify-rpm-contract.py) fails a build whose
+# installed GNOME shell/mutter/etc. is a different major release than the one
+# this manifest promises, so a downstream rebuild cannot silently downgrade the
+# desktop. gtk4 and libadwaita are pinned to their own majors; glibc-all-
+# langpacks is glibc-versioned, not a GNOME component, so it is not asserted.
+# nautilus and gnome-initial-setup track the GNOME release and are asserted
+# with the rest of the desktop; localsearch and the gvfs backends version
+# independently of GNOME, so they are not.
+[gnome.versions]
+gnome-control-center = "51"
+gnome-initial-setup = "51"
+gnome-session = "51"
+gnome-settings-daemon = "51"
+gnome-shell = "51"
+gsettings-desktop-schemas = "51"
+mutter = "51"
+nautilus = "51"
+xdg-desktop-portal-gnome = "51"
+gtk4 = "4"
+libadwaita = "1"
+
 [parity]
 # Packages Bluefin's image carries without naming them in bluefin.toml, because
 # Fedora's Silverblue base supplies them, and which Hummingbird's repository
@@ -91,7 +100,10 @@ packages = [
 # ALSA use-case profiles, the language pack and the core font set.
 #
 # Left out, with the dependency the pinned repositories do not carry:
-#   default-fonts-core-math    needs stix-fonts (utah-packages#147)
+#   default-fonts-core-math    the factory now publishes stix-fonts (#382),
+#                              so the dependency half of this gap is closed;
+#                              the font package join itself is a separate
+#                              parity ticket (#263).
 #
 # Wi-Fi, printing, fingerprint login and PDF tools arrived with the factory
 # image published 2026-09-25 (sha256:9e17ca2c), the first publish since
@@ -133,6 +145,16 @@ packages = [
     # Dakota parity gap this resolves (utah-packages#146, now published).
     "alsa-ucm",
     "alsa-utils",
+    # Bluetooth printer backend, published by the pinned factory (#390).
+    "bluez-cups",
+    # Intel VA-API iHD and both Media SDK/oneVPL runtime generations (#383).
+    "intel-gmmlib",
+    "libva-intel-media-driver",
+    "intel-mediasdk",
+    "intel-vpl-gpu-rt",
+    "libvpl",
+    # GStreamer bad-free and Totem remain omitted pending their dependency
+    # closures (SoundTouch/faad/openal/srtp2 and uchardet); tracked by #383.
     # Locale and fonts
     "langpacks-en",
     "langpacks-fonts-en",
@@ -145,6 +167,11 @@ packages = [
     "google-noto-serif-vf-fonts",
     "google-noto-sans-symbols-2-fonts",
     "google-noto-sans-math-fonts",
+    # Math-font core set. stix-fonts is published in the pinned factory image
+    # (resolves utah-packages#147). default-fonts-core-math, which Requires
+    # it, stays out until its own parity ticket (#263); this adds the font
+    # itself (#382).
+    "stix-fonts",
     # Shell and tooling Bluefin users reach for
     "bash-completion",
     "man-db",
@@ -160,6 +187,13 @@ packages = [
     "crypto-policies-scripts",
     "python3-pip",
     "systemd-container",
+    # pam_pwquality's dictionary. Fedora's Silverblue base pulls it in;
+    # Hummingbird's cracklib does not require it. Without it libpwquality
+    # fails every candidate with "error loading dictionary", so passwd (via
+    # pam_pwquality in system-auth) refused every new password, GNOME Settings'
+    # password change with it, and Initial Setup rated every password a
+    # failure. Verified on a booted testing-20261001-41873b5.
+    "cracklib-dicts",
     # Printing (driverless IPP Everywhere; ghostscript and cups-filters first
     # published in the factory image of 2026-09-26), fingerprint login, PDF tools.
     "cups",
@@ -172,6 +206,11 @@ packages = [
     "lm_sensors",
     "libimobiledevice-utils",
     "vim-enhanced",
+    # GPU process monitor. Bluefin's published image ships it from a build
+    # file outside the copied base.toml (baselines/bluefin/rpms.tsv); the
+    # Homebrew formula is deprecated, so the factory build published by
+    # utah-packages#311 is the source. Tracked by #451.
+    "nvtop",
     # Base-image parity measured from the published Bluefin image rather than
     # its manifest (baselines/GAP.md, #263). Bluefin inherits all of these from
     # Silverblue; each resolves today against Hummingbird and the pinned
@@ -189,6 +228,22 @@ packages = [
     "acl",
     "attr",
     "buildah",
+    # Factory-built names the pinned factory image publishes and the
+    # parity audit catalog tracks as built but not yet consumed (#382).
+    # Each resolves against the pinned factory repodata (sha256:0f04cff)
+    # + Hummingbird primary; exact-EVR couplings verified by CI on
+    # build utah run 37066608765. The Intel media runtimes
+    # (intel-gmmlib, libva-intel-media-driver) are requested with
+    # intel-mediasdk and intel-vpl-gpu-rt in the Intel media block above.
+    "desktop-file-utils",
+    "fuse-libs",
+    "gvfs-smb",
+    "ibus-gtk4",
+    "libnma",
+    "libpcap",
+    "linux-atm-libs",
+    "pipewire-config-raop",
+    "setools-console",
     # Network filesystems: base-image parity measured from the published
     # Bluefin image (baselines/GAP.md, #263). Bluefin inherits the full samba
     # closure from Silverblue; samba resolves today against the pinned
@@ -225,21 +280,34 @@ packages = [
 # arrive through the Recommends, which the install keeps: the image
 # transaction does not set install_weak_deps=False.
 #
-# microcode_ctl is deliberately absent. It is in neither enabled repository,
-# so naming it would fail the transaction outright rather than record a gap;
-# CPU errata updates need a factory recipe first and are worth their own
-# issue.
-#
-# Necessary, not sufficient: with the firmware present the driver loads, but
-# NetworkManager still does not manage the interface until NetworkManager-wifi
-# can be installed. That half is blocked on the factory, and [parity] above
-# records why.
+# Firmware lets the driver load its device blob; NetworkManager's Wi-Fi
+# support also needs the userspace stack. [parity] above installs
+# NetworkManager-wifi, wpa_supplicant, wireless-regdb and iw now that the
+# factory dependencies are published. Package coverage is not proof that
+# every wireless device works; validate association on the target hardware.
 packages = [
     "linux-firmware",
     "iwlwifi-dvm-firmware",
     "iwlwifi-mvm-firmware",
     "iwlwifi-mld-firmware",
     "iwlegacy-firmware",
+    # Intel sound and camera firmware shipped separately from linux-firmware
+    # (#382). alsa-sof-firmware is the Sound Open Firmware blobs that the
+    # snd-sof-pci driver loads; without it the Intel audio device shows up
+    # but never plays.
+    "alsa-sof-firmware",
+    # Intel camera (ipu6) firmware, distinct from linux-firmware's camera
+    # coverage (#382).
+    "intel-vsc-firmware",
+    # Marvell libertas Wi-Fi firmware. Not in linux-firmware's weak-deps
+    # set; the radio needs the libertas-firmware package explicitly.
+    "libertas-firmware",
+    # Intel/AMD CPU microcode updates, packaged separately from
+    # linux-firmware (#382). microcode_ctl was deliberately absent because
+    # the factory had no recipe; the factory now publishes one. Early loading
+    # also needs the initramfs regenerated after this install: until #564
+    # lands, the shipped initramfs carries no microcode at all.
+    "microcode_ctl",
 ]
 
 [build]
@@ -265,6 +333,9 @@ packages = [
 # Bluefin's desktop image adds these to the server base before 40-services.sh
 # enables their units. uupd is downloaded separately because it is published
 # as a release binary rather than an RPM in the Hummingbird repositories.
+# Avahi's client libraries do not install the daemon. The explicit avahi
+# request supplies avahi-daemon.service/socket enabled by the desktop policy
+# (#104, #387); switcheroo-control is already in the Bluefin contract.
 #
 # systemd-resolved and flatpak are not in the Bluefin contract because Fedora's
 # base image already carries them. Hummingbird's bootable base does not.
@@ -280,18 +351,58 @@ packages = [
 # -- and an installed system whose disk is encrypted could not manage its own
 # keys. The initramfs already carries the crypt and systemd-cryptsetup dracut
 # modules, so unlocking was never the gap; creating the volume was.
+#
+# systemd-boot-unsigned carries the boot manager binaries bootctl updates from.
+# bootupd stands down on systemd-boot systems by design ("managed with
+# bootctl"), so without this package a systemd-boot Utah -- for example one
+# switched over from Dakota -- can never update its ESP boot manager: bootctl
+# has nothing to install and the binaries freeze at whatever the previous
+# image carried (#363). It is the unsigned build, consistent with the alpha's
+# no-Secure-Boot posture; GRUB and shim stay the Secure Boot story and keep
+# flowing through bootupd.
+#
+# zram-generator + zram-generator-defaults are the bare-metal swap (#384). The
+# audit found swapon -s empty and zramctl showing nothing: the server base
+# ships no swap at all. zram-generator-defaults ships
+# /usr/lib/systemd/zram-generator.conf, which the generator reads at boot, so
+# installing the two packages both adds the swap and enables the generator --
+# one zram device sized zram-size = min(ram, 8192), i.e. all of RAM capped at
+# 8 GiB. That is exactly what Bluefin ships (it has no custom zram config of
+# its own), so the size is the package default, not something restated here.
+# Not verified in-tree: #384's acceptance check is `swapon -s` showing a zram
+# device on a booted install, and no e2e job here asserts in-VM swap. Run it
+# against the next `testing` image before closing #384.
+# systemd-oomd-defaults is the related memory-pressure half of #384 and is
+# deliberately not taken here: #404 kept itself to one logical change (the
+# swap device), and the issue left the OOM decision to its author. Utah
+# therefore runs with zram swap and stock kernel OOM handling, not
+# systemd-oomd's pressure-based kills. Revisit it as its own change against
+# #384's OOM question rather than assuming the omission was an oversight.
 packages = [
+    "avahi",
     "cryptsetup",
     "flatpak",
     "fwupd",
+    "systemd-boot-unsigned",
     "systemd-resolved",
     "tailscale",
+    "zram-generator",
+    "zram-generator-defaults",
 ]
 
 [unavailable]
-# Packages Bluefin ships that none of Utah's repositories provide.  Each entry
-# MUST carry a tracking issue: this list is the documented parity debt, not a
-# dumping ground for packages that are merely inconvenient.
+# Bluefin parity gaps none of Utah's enabled repositories provide.  Two kinds
+# of gap land here and both count as parity debt:
+#
+#   contract gaps  names in packages/bluefin.toml (the copied base.toml) that
+#                  neither utah-packages nor Hummingbird's repository carries
+#   image gaps     names Bluefin's published image ships from a build file
+#                  outside the copied contract, recorded in the snapshot at
+#                  baselines/bluefin/rpms.tsv and triaged in
+#                  baselines/triage.toml
+#
+# Each entry MUST carry a tracking issue: this list is the documented parity
+# debt, not a dumping ground for packages that are merely inconvenient.
 #
 # evolution-ews-core
 #
@@ -306,23 +417,18 @@ packages = [
 #   #10.
 #
 # fish
-#   Fedora's fish spec uses %cargo_generate_buildrequires, which requires
-#   every Rust crate as a system RPM (rust-anstyle, rust-clap, ...). Fedora
-#   44 does not ship Rust crate binary packages -- they exist only in
-#   Rawhide -- so the buildroot cannot satisfy them. Building fish needs a
-#   vendored/cargo-fetch rebuild of the spec rather than the system-crate
-#   model.
-#
-# zsh
-#   The HTML docs build target pulls texi2html, which drags Fedora's ruby
-#   (ruby-default-gems) into a buildroot that already carries Hummingbird's
-#   ruby4.0. The two conflict on file paths, so the transaction fails. Needs
-#   either a ruby exclusion in the buildroot or dropping the html subpackage.
+#   Deliberately excluded, not blocked: the factory builds it and it resolves,
+#   but Bluefin classic shipping every shell was a mistake Utah does not repeat.
+#   Users who want fish get it from Homebrew. Tracked by #419.
 #
 # firefox
+#   Neither enabled repository provides the firefox RPM: the factory does
+#   not build it and Hummingbird's server repository does not carry it.
 #   Utah installs org.mozilla.firefox as a Flatpak through the desktop
-#   contract. The RPM browser is deliberately excluded, while mozjs140 is
-#   retained for GNOME Shell. Tracked by #35 and utah-packages#112.
+#   contract, so if the factory ever builds the RPM this entry becomes a
+#   deliberate exclusion rather than a contract addition -- the gate fires
+#   and a human decides. mozjs140 is retained for GNOME Shell regardless.
+#   Tracked by #35 and utah-packages#112.
 #
 # anaconda-live, slitherer
 #   Utah's ISO uses bootc-installer. Both alternative installer packages need
@@ -330,23 +436,6 @@ packages = [
 #   needs a working GHmac backend in Hummingbird's GLib. Slitherer also lacks
 #   its Qt WebEngine dependency closure. Match the factory's installer policy
 #   until that path is supported; tracked by #83.
-#
-# libgda, libgda-sqlite
-#   Upstream added both as runtime dependencies for the maintained Copyous
-#   extension (bluefin#1210). Neither is in the pinned factory image or in
-#   public-hummingbird-x86_64-rpms -- Hummingbird carries no package whose
-#   name contains gda at all. One factory recipe would cover both, because
-#   libgda-sqlite is a subpackage of the libgda SRPM rather than its own
-#   source. Tracked by #106.
-#
-# ppp
-#   In neither repository, and nothing in either Provides it. This one costs
-#   more than dial-up: Hummingbird ships NetworkManager-ppp (1.58.0-1.hum1
-#   and 1.58.1-1.hum1) whose metadata carries Requires: ppp, so that plugin
-#   is uninstallable from their own repository and NetworkManager's PPPoE and
-#   PPTP paths cannot be installed at all. The same shape as avahi (#104):
-#   a plugin shipped without the daemon behind it.
-#   Tracked by #107.
 #
 # grub2-efi-x64-cdboot
 #   The factory supplies it, but it must be the same build as grub2-efi-x64,
@@ -359,17 +448,29 @@ packages = [
 #
 # pipewire-libs-extra is supplied by the pinned September 10 factory candidate
 # and returns to the install contract (#35).
+#
+# nss-mdns
+#   nss-mdns is the Name Service Switch module that resolves .local hostnames
+#   over mDNS, so `ping foo.local` resolves. Bluefin ships it
+#   (baselines/bluefin/rpms.tsv, nss-mdns 0.15.1-28.fc44); Utah does not, and
+#   Hummingbird's repository does not carry it either -- verified in
+#   repodata/primary.xml, where nss-mdns appears only as a Recommends of cups
+#   (a virtual provide) and never as an installable <name>. It is an
+#   image-level parity gap, not inherited from the copied base.toml contract
+#   (nss-mdns is not in packages/bluefin.toml) and not built by the
+#   utah-packages factory, so no repository Utah enables at runtime supplies it.
+#   Enabling avahi-daemon restores mDNS service browsing but not .local name
+#   resolution, which is what this module provides; the two are separate
+#   (found while reviewing #411). Returns once the factory builds nss-mdns for
+#   Hummingbird and utah-packages publishes the build; tracked by #499.
 packages = [
     "grub2-efi-x64-cdboot",
     "anaconda-live",
     "evolution-ews-core",
     "firefox",
     "fish",
-    "libgda",
-    "libgda-sqlite",
-    "ppp",
+    "nss-mdns",
     "slitherer",
-    "zsh",
 ]
 
 # nvidia-container-toolkit was recorded here as a second gap. It is not one, and
@@ -408,3 +509,80 @@ packages = [
 # against one of NVIDIA CUDA images gets the full toolkit with GPU access and
 # nothing in the base image. That is a better answer than 7.68 GB of it baked in,
 # so this stays out unless someone asks for it with that trade-off in view.
+
+# Final-runtime repository allowlist (issue #21). Only these repositories may be
+# enabled when the image runs; Fedora repositories are bootstrap material for the
+# factory buildroot, never a source of installed packages. Each allowed id must
+# also pin its origin in [repositories.baseurls], otherwise the allowlist would
+# certify a name without a source and could be satisfied by anything served
+# under that section id.
+[repositories]
+allowed = ["public-hummingbird-x86_64-rpms", "utah-packages", "nvidia-container-toolkit"]
+
+# The exact origin each allowlisted repository serves. verify-rpm-contract.py
+# fails a build that enables an allowlisted repository with a different baseurl,
+# a metalink/mirrorlist (which DNF merges with any baseurl the section declares),
+# or no baseurl at all -- and rejects proxy= or sslverify=0 on an allowlisted
+# repository, which reroute or weaken the fetch, or gpgcheck=0 / repo_gpgcheck=0
+# on one that is not approved to drop signature verification in
+# [repositories.security] (#345).
+[repositories.baseurls]
+public-hummingbird-x86_64-rpms = ["https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/"]
+utah-packages = ["file:///etc/utah-packages"]
+nvidia-container-toolkit = ["https://nvidia.github.io/libnvidia-container/stable/rpm/$basearch"]
+
+# Which signature/TLS weakening each allowlisted repository is approved to carry.
+# verify-rpm-contract.py rejects proxy=, sslverify=0, gpgcheck=0, and
+# repo_gpgcheck=0 on any allowlisted repository; a repository named here with an
+# option is the documented, intentional exception for that option ("gpgcheck"
+# also covers its libdnf5 alias pkg_gpgcheck). No allowlisted repository not
+# named here may explicitly disable signature verification (#345). The value
+# names the option approved to be disabled, not its value, so the approval
+# cannot drift to a weaker spelling.
+[repositories.security]
+# utah-packages RPMs are authenticated by the pinned package image and its OCI
+# provenance, not by an RPM GPG key, so both package and metadata signature
+# checks are disabled here; the pin is the signature.
+utah-packages = ["gpgcheck", "repo_gpgcheck"]
+# NVIDIA signs its repomd.xml (repo_gpgcheck=1) but not the package payloads,
+# so only package signature verification (gpgcheck) is disabled here.
+nvidia-container-toolkit = ["gpgcheck"]
+
+# GNOME desktop components the utah-packages factory rebuilds with the .bfin
+# release tag, so a Bluefin image is never built against Hummingbird's server
+# packages. Only GNOME desktop components are listed: their factory build is the
+# thing being asserted. gtk4, libadwaita and xdg-desktop-portal are not -- they
+# are not always rebuilt by the factory, and asserting them here would make the
+# general .hum-or-.bfin check on them fail on a legitimate Hummingbird build.
+#
+# This is not the same set as the factory-exclusive one in
+# scripts/install-packages.py, which compares every [gnome] and [hardware]
+# package against what the mounted utah-packages repository offers *right now*
+# to catch a stale layer-cached transaction (#371). That is an availability and
+# version-skew question about the repository; this section is the narrower
+# identity question about the installed release, so a package can be checked for
+# skew without its release tag being contractually pinned to the factory.
+#
+# `parity` names the [parity] packages the factory itself supplies. The factory
+# publishes as `.hum<N>.bfin`, which outranks Hummingbird's own `.hum<N>`, so a
+# copy of one of these without `.bfin` means the transaction silently resolved
+# somewhere else (issue #21). Add a name here only once the factory publishes
+# it: each of these has a recipe in utah-packages and is recorded above in the
+# [parity] header as shipped by the factory image.
+[factory]
+packages = [
+    "gnome-shell",
+    "mutter",
+    "gnome-session",
+    "gnome-settings-daemon",
+    "gnome-control-center",
+    "gsettings-desktop-schemas",
+]
+parity = [
+    "wpa_supplicant",
+    "wireless-regdb",
+    "iw",
+    "alsa-utils",
+    "fprintd",
+    "fprintd-pam",
+]

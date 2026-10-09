@@ -1,7 +1,7 @@
 ---
 name: containerfile
 version: "1.0"
-last_updated: "2026-09-26"
+last_updated: "2026-10-02"
 id: containerfile
 one_line_purpose: Edit the Containerfile without regressing layer count or cache hits.
 entry_point: docs/skills/containerfile.md
@@ -53,6 +53,22 @@ In summary:
   the digest-pinned OCI package repository for reproducible CI builds, while
   allowing local composition to inject a local image from containers-storage
   via `just build-local`.
+- A `PACKAGE_IMAGE_SHA` bump must also move the `# factory-pin:` stamp in
+  `packages/utah-packages.repo`. The transaction reads the `packages` stage
+  through a bind mount, which is not part of the RUN cache key, and the ARG
+  change alone does not bust the layer on CI's buildah -- a pin-only commit
+  rebuilt nothing and shipped the previous factory's packages (#371). The
+  stamp rides a COPY before the transaction, and COPY content always keys the
+  cache. A test fails the build when the two disagree.
+- Renovate's built-in Dockerfile extraction skips the composed package ARG.
+  The repository's regex manager instead discovers the digest directly in
+  `PACKAGE_IMAGE_SHA` and in the `.repo` stamp, with both occurrences grouped
+  as `ghcr.io/projectbluefin/utah-packages:latest`. This retains the local
+  `PACKAGE_IMAGE_REF` override and the digest-only OCI factory label.
+  Renovate 44.132.2 extraction and real replacement were exercised against
+  both files: they change to one digest while preserving unrelated content.
+  The duplicate scheduled updater is retired; the grouped PR must still
+  pass the package transaction and cache-stamp equality checks.
 - External executable release assets (such as `uupd`) are pinned by version
   and verified with explicit sha256 checksums (`UUPD_SHA256`) before
   extraction.
@@ -123,6 +139,18 @@ write it. The cache is off, silently, whenever the package is not readable
 from where the build runs, which is the case until a testing-branch build has
 pushed once.
 
+The transaction's cache key is its COPY'd inputs: the manifests, the repo
+files (the `# factory-pin:` stamp among them, #371) and the install script.
+Hummingbird's own repository is unpinned and rolling, so none of those move
+when it publishes, and the cache used to replay the same transaction until a
+base-image bump busted it. `build-ghcr` therefore resolves the repository's
+`repomd.xml` `<revision>` -- a publish timestamp -- and passes its UTC day as
+`ARG HUMMINGBIRD_REPO_DAY`, declared directly above the transaction. The day,
+not the raw revision: Hummingbird republishes several times a day, and keying
+on every publish would rebuild the most expensive layer on nearly every run.
+Unresolvable metadata warns and builds with `unresolved`; local builds keep
+the `unset` default.
+
 ## Adding a script
 
 All of Utah's scripts arrive in one COPY, staged under `/tmp/utah-scripts/`
@@ -166,6 +194,41 @@ last package install, which is the NVIDIA and OGC step, not after the main
 transaction. The lint that checks the result runs in the same layer
 (`bootc container lint --fatal-warnings --skip nonempty-boot`): nothing can
 change between the two (comment, `Containerfile`).
+
+The one deliberate exception is `/var/home`, created after clean-stage but
+before lint in that same RUN. `/home` is a symlink to `var/home` and
+useradd ships `HOME=/home` (#576), so any `useradd --create-home` fails on
+a dangling symlink -- the installer chroot on a fresh install (no tmpfiles
+has run there yet), the tacklebox customize container, and the live ISO
+build all broke with `cannot create directory /home`, exit 12 (#602).
+clean-stage strips all of `/var` except cache, so the mkdir cannot go
+earlier; placing it before lint keeps lint proving the directory is covered
+by the `utah-home.conf` tmpfiles entry. A tmpfiles `d` line alone is not
+enough -- it only runs at boot, never in the installer chroot.
+
+## `just` override and the 1.56 floor
+
+Utah's `00-entry.just` imports Common's renamed entry (`00-common.just`) plus
+its own `60-custom.just` at a shallower depth than Common's own `import?`
+lines reach `60-custom.just`. The override wins on `just` >= 1.56, which
+stopped deduplicating an AST across nested imports of the same file; earlier
+versions deduplicated, Common's deeper import shadowed ours, and every
+override silently reverted to Common's recipe (issue #449). The Containerfile
+preserves the mechanism by renaming Common's `00-entry.just` to
+`00-common.just` before staging Utah's local files, so the shallower override
+is in place by the time the entry point runs.
+
+The shipped image is already past the floor: `baselines/utah/rpms.tsv` records
+`just 1.57.0-1.hum1.bfin` (Bluefin's parity manifest, `baselines/bluefin/rpms.tsv`,
+records `1.57.0-1.fc44`). The `just` package is inherited from Bluefin and its
+version is not pinned here. Two checks keep it that way:
+`tests/test_ujust_overrides.py` asserts the baseline NEVR stays >= 1.56 so an
+image regression below the floor fails the suite, and the same module's
+host-side override tests skip with a message naming issue #449 when the
+developer's own `just` is below the floor. `just` is already listed in
+`packages/bluefin.toml` as part of the mirrored parity manifest -- do not pin
+or override its version there or in `packages/utah.toml`; that contract
+belongs to Bluefin.
 
 ## Verification
 

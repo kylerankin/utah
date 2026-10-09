@@ -341,6 +341,22 @@ GNOME 51.beta
 Mutter (Wayland)
 """
 
+    # Verbatim excerpt from fastfetch-ocr.txt in the iso-diagnostics-utah-nvidia
+    # artifact of run 36769782907. Tesseract substituted inside the sentinel
+    # fragment itself ("E2E" read as "£26") while reading the "-FASTFETCH"
+    # suffix and the whole fastfetch body cleanly -- the same misread failed
+    # four consecutive flavors and runs (#375), and identical sentinel pixels
+    # read clean the rest of the time.
+    SUBSTITUTED_TRANSCRIPT = """\\‘uran-£26-FASTFETCH
+[utahtest@utah-luks-test ~]$
+
+Utah (Version: testing-20260930-9f3baa2)
+Linux 7.2.7-200.fc44.x86_64
+
+GNOME 51.0
+Mutter (Wayland)
+"""
+
     def matches(self, transcript):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "fastfetch-ocr.txt"
@@ -361,6 +377,22 @@ Mutter (Wayland)
 
     def test_rejects_fastfetch_body_without_the_sentinel(self):
         self.assertFalse(self.matches("Kernel: 7.1.8-100.fc43.x86_64\nGNOME 51.beta\n"))
+
+    def test_accepts_transcript_with_substituted_sentinel_fragment(self):
+        self.assertTrue(self.matches(self.SUBSTITUTED_TRANSCRIPT))
+
+    def test_rejects_suffix_with_kernel_but_no_second_body_token(self):
+        self.assertFalse(self.matches(
+            "uran-£26-FASTFETCH\nLinux 7.2.7-200.fc44.x86_64\n2 mins\n"))
+
+    def test_rejects_suffix_with_body_but_no_kernel_token(self):
+        self.assertFalse(self.matches(
+            "uran-£26-FASTFETCH\nGNOME 51.0\nMutter (Wayland)\n"))
+
+    def test_harness_rereads_the_same_screenshot_before_reshooting(self):
+        script = (ROOT / "iso/scripts/luks-e2e.sh").read_text()
+        self.assertIn("for _ocr in 1 2 3", script)
+        self.assertIn("break 2", script)
 
     def test_rejects_an_empty_or_missing_transcript(self):
         self.assertFalse(self.matches(""))
@@ -617,3 +649,65 @@ class BuildToolingRemovalTests(unittest.TestCase):
     def test_removal_cleans_the_dependency_closure(self):
         self.assertNotIn("--no-autoremove", self.remove_line(),
                          "removal must let dnf clean the orphaned build closure")
+
+
+class IsoBakeParserTests(unittest.TestCase):
+    """The ISO bake must ship the Flatpak parser it calls.
+
+    Post-Testing E2E run 37346082548 failed five cells with exit 127: both
+    ISO Containerfiles call
+    /usr/local/libexec/utah-verify-desktop-contract, but the stages are FROM
+    the shipped image, which strips build-time scripts (clean-stage), and the
+    iso/live/ build context cannot reach repo-root scripts/. So the build
+    scripts stage the parser into the context (removed by trap) and the
+    Containerfiles ship it persistently in the overlay -- which is also what
+    puts it on the live guest luks-e2e shells into (absolute path; the
+    overlay is not on the default PATH).
+    """
+
+    PARSER = "src/utah-verify-desktop-contract.py"
+    INSTALLED = "/usr/local/libexec/utah-verify-desktop-contract"
+    STAGED = "iso/live/src/utah-verify-desktop-contract.py"
+
+    def test_both_containerfiles_ship_the_parser(self):
+        for name in ("iso/live/Containerfile", "iso/live/Containerfile.tacklebox"):
+            with self.subTest(containerfile=name):
+                text = (ROOT / name).read_text()
+                self.assertIn(
+                    f"COPY --chmod=0755 {self.PARSER} {self.INSTALLED}", text,
+                    f"{name} must ship the parser the bake RUN calls")
+
+    def test_both_build_scripts_stage_and_clean_the_parser(self):
+        staged = "cp scripts/verify-desktop-contract.py " + self.STAGED
+        for name in ("iso/scripts/build-iso.sh",
+                     "iso/scripts/build-iso-tacklebox.sh"):
+            with self.subTest(script=name):
+                text = (ROOT / name).read_text()
+                self.assertIn(staged, text,
+                              f"{name} must stage the parser into the build context")
+                self.assertIn(self.STAGED, text.split("trap", 1)[1],
+                              f"{name} must remove the staged parser on exit")
+
+    def test_staged_copy_is_not_committed(self):
+        # The staged file must never exist in the tree: it is build litter
+        # the traps remove. The COPY source of truth stays scripts/.
+        self.assertFalse((ROOT / self.STAGED).exists(),
+                         "staged parser left behind by a build run")
+
+    def test_luks_copies_the_parser_to_the_target(self):
+        # /usr/local is the admin's domain, not image content: a bootc
+        # deployment never carries /usr/local/libexec, so the verifier the
+        # live guest has is absent (exit 127) on the installed system.
+        # luks-e2e must copy the repo parser over scp and run it with the
+        # target's python3 -- never call the live-only absolute path.
+        text = (ROOT / "iso/scripts/luks-e2e.sh").read_text()
+        self.assertIn("scp_target", text,
+                      "luks-e2e must define an scp helper for the installed target")
+        self.assertIn("scripts/verify-desktop-contract.py", text,
+                      "luks-e2e must copy the repo parser to the installed system")
+        self.assertIn("python3 /tmp/utah-e2e-verify-desktop-contract.py --flatpaks", text,
+                      "luks-e2e must run the copied parser with the target python3")
+        self.assertNotIn(f'"{self.INSTALLED} --flatpaks', text,
+                         "the live-only installed path does not exist on bootc deployments")
+        self.assertNotIn('"utah-verify-desktop-contract --flatpaks', text,
+                         "bare parser name is not on the guest PATH")

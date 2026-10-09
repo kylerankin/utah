@@ -118,9 +118,24 @@ def validate_contract(contract: dict[str, Any]) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--check", action="store_true", help="validate contract syntax only")
-    parser.add_argument("contract", type=Path)
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--check", action="store_true", help="validate contract syntax only")
+    modes.add_argument("--flatpaks", type=Path, metavar="BREWFILE", help="print declared Flatpak IDs")
+    parser.add_argument("contract", type=Path, nargs="?")
     args = parser.parse_args()
+    if args.flatpaks is not None:
+        if args.contract is not None:
+            parser.error("--flatpaks does not take a contract argument")
+        try:
+            apps = parse_brewfile(args.flatpaks)
+        except OSError as exc:
+            fail(str(exc))
+            return 1
+        for app in apps:
+            print(app)
+        return 0
+    if args.contract is None:
+        parser.error("contract is required unless --flatpaks is given")
 
     contract = tomllib.loads(args.contract.read_text())
     errors = validate_contract(contract)
@@ -141,15 +156,21 @@ def main() -> int:
             if not Path(file_name).is_file():
                 errors.append(f"required file is missing: {file_name}")
 
-    os_release = read_os_release(Path("/usr/lib/os-release"))
-    errors.extend(
-        verify_values(
-            "os-release",
-            os_release,
-            branding.get("os_release", {}),
-            branding.get("os_release_patterns", {}),
+    # /usr/lib/os-release is the canonical file; /etc/os-release is what the
+    # GNOME About panel reads. On bases where it is a regular file rather than a
+    # symlink, it can keep the base identity, so both must satisfy the contract.
+    for os_release_path in ("/usr/lib/os-release", "/etc/os-release"):
+        if not Path(os_release_path).is_file():
+            errors.append(f"required file is missing: {os_release_path}")
+            continue
+        errors.extend(
+            verify_values(
+                os_release_path,
+                read_os_release(Path(os_release_path)),
+                branding.get("os_release", {}),
+                branding.get("os_release_patterns", {}),
+            )
         )
-    )
 
     image_info_path = Path("/usr/share/ublue-os/image-info.json")
     if image_info_path.is_file():

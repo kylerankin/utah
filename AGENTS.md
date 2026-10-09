@@ -50,11 +50,16 @@ checks (`scripts/check-skill-frontmatter.sh`, `scripts/check-skill-index.sh`,
   workflow or Justfile recipe may name `utah-nvidia` or `utah-gaming`
   literally — `just check` fails on it. Retire a flavor by moving it under
   `retired` with the reason.
-- **Containerfile ARG digests are Renovate-managed pins** (`BASE_IMAGE`,
-  `PACKAGE_IMAGE_SHA`, `COMMON_IMAGE_SHA`, `BREW_IMAGE_SHA`). Do not bump them
-  by hand unless the task is exactly that. `Containerfile` and
+- **Containerfile ARG digests are pinned** (`BASE_IMAGE`, `PACKAGE_IMAGE_SHA`,
+  `COMMON_IMAGE_SHA`, `BREW_IMAGE_SHA`). Do not bump them by hand unless the
+  task is exactly that. All four pins are Renovate-managed. Utah's regex
+  manager discovers `PACKAGE_IMAGE_SHA` and the repository's `# factory-pin:`
+  stamp as one grouped Docker digest update, preserving the package ARG
+  indirection and local image override. `Containerfile` and
   `Containerfile.kernel` must share the same `BASE_IMAGE` line; `just check`
-  asserts it.
+  asserts it. A `PACKAGE_IMAGE_SHA` bump must also move the `# factory-pin:`
+  stamp in `packages/utah-packages.repo` — the stamp is the transaction's
+  layer-cache key, the ARG alone does not bust it (#371).
 - **Layer discipline.** Read the comment block at the top of `Containerfile`
   before editing it: sources arrive in as few COPYs as origins allow, small
   RUN steps fold into neighbours, and per-image ARGs are declared late because

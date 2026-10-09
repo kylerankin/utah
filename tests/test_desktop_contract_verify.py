@@ -112,6 +112,7 @@ class VerifyModeTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / "image"
         self.write("/usr/lib/os-release", self.os_release_text(OS_RELEASE))
+        self.write("/etc/os-release", self.os_release_text(OS_RELEASE))
         self.write("/usr/share/ublue-os/image-info.json", json.dumps(IMAGE_INFO))
         self.write("/usr/share/ublue-os/bluefin.png", "png")
         self.write("/etc/dconf/db/distro.d/01-bluefin-folders", "Bazaar App Store\n")
@@ -201,8 +202,7 @@ class CompliantImageTests(VerifyModeTests):
 
     def test_verify_mode_reads_the_image_not_the_build_tree(self):
         self.remove("/usr/lib/os-release")
-        with self.assertRaises(FileNotFoundError):
-            self.verify()
+        self.assert_rejected(naming="required file is missing: /usr/lib/os-release")
 
 
 class RequiredFileTests(VerifyModeTests):
@@ -235,6 +235,35 @@ class OsReleaseTests(VerifyModeTests):
         values = {key: value for key, value in OS_RELEASE.items() if key != "ID"}
         self.write("/usr/lib/os-release", self.os_release_text(values))
         self.assert_rejected(naming="os-release ID must be 'utah', got None")
+
+    def test_a_stale_etc_os_release_is_reported(self):
+        # The About panel reads /etc/os-release; a base that ships it as a
+        # regular file keeps showing the base identity if it is not synced.
+        values = dict(OS_RELEASE, NAME="Fedora Linux", ID="fedora")
+        self.write("/etc/os-release", self.os_release_text(values))
+        errors = self.assert_rejected(naming="/etc/os-release ID must be 'utah', got 'fedora'")
+        self.assertNotIn("/usr/lib/os-release", errors)
+
+    def test_a_stale_usr_lib_os_release_is_reported_with_its_path(self):
+        values = dict(OS_RELEASE, ID="fedora")
+        self.write("/usr/lib/os-release", self.os_release_text(values))
+        errors = self.assert_rejected(naming="/usr/lib/os-release ID must be 'utah', got 'fedora'")
+        self.assertNotIn("/etc/os-release", errors)
+
+    def test_a_symlinked_etc_os_release_follows_the_canonical_file(self):
+        # Symlink bases: /etc/os-release -> ../usr/lib/os-release.
+        (self.root / "etc/os-release").unlink()
+        (self.root / "etc/os-release").symlink_to("../usr/lib/os-release")
+        code, _, errors = self.verify()
+        self.assertEqual(code, 0, errors)
+        values = dict(OS_RELEASE, ID="fedora")
+        self.write("/usr/lib/os-release", self.os_release_text(values))
+        errors = self.assert_rejected(naming="/etc/os-release ID must be 'utah', got 'fedora'")
+        self.assertIn("/usr/lib/os-release ID must be 'utah', got 'fedora'", errors)
+
+    def test_a_missing_etc_os_release_is_reported(self):
+        self.remove("/etc/os-release")
+        self.assert_rejected(naming="required file is missing: /etc/os-release")
 
 
 class ImageInfoTests(VerifyModeTests):
@@ -378,6 +407,43 @@ class FailClosedTests(VerifyModeTests):
         ):
             with patch("sys.stdout"), patch.object(desktop.sys, "stderr"):
                 self.assertEqual(desktop.main(), 1)
+
+
+class FlatpaksModeTests(unittest.TestCase):
+    """`--flatpaks BREWFILE` prints refs to stdout, one per line.
+
+    Containerfile (iso/live/Containerfile, Containerfile.tacklebox) and
+    luks-e2e.sh consume this to share the parser with the build-time
+    contract check instead of carrying their own awk; without a contract
+    in hand the mode is parser-only and exits 0.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.brewfile = Path(self.tmp.name) / "system-flatpaks.Brewfile"
+        self.brewfile.write_text(
+            'flatpak "org.gnome.Calculator"\n'
+            'tap "homebrew/cask"\n'
+            'flatpak "org.mozilla.firefox"\n'
+        )
+
+    def test_prints_refs_one_per_line(self):
+        with patch.object(desktop.sys, "argv", ["verify", "--flatpaks", str(self.brewfile)]):
+            with patch("sys.stdout") as out, patch.object(desktop.sys, "stderr"):
+                code = desktop.main()
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            "".join(call.args[0] for call in out.write.call_args_list if call.args),
+            "org.gnome.Calculator\norg.mozilla.firefox\n",
+        )
+
+    def test_missing_brewfile_exits_nonzero(self):
+        missing = Path(self.tmp.name) / "absent.Brewfile"
+        with patch.object(desktop.sys, "argv", ["verify", "--flatpaks", str(missing)]):
+            with patch("sys.stdout"), patch.object(desktop.sys, "stderr") as err:
+                code = desktop.main()
+        self.assertEqual(code, 1)
 
 
 if __name__ == "__main__":

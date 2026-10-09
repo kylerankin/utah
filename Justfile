@@ -16,10 +16,25 @@ default:
 # under tests/ that holds test modules. Bare `unittest discover` rooted at
 # tests/ skipped subdirectories such as tests/unit/ silently -- it reported
 # OK whether the tests there passed, failed, or never ran.
+#
+# The third-party modules the suite needs are declared in
+# tests/requirements.txt, not installed silently here. A quiet `pip install ||
+# true` hid its own failure: the modules stayed missing and the suite reported
+# 46 errors that read like regressions instead of one message naming the
+# dependency.
 test:
     #!/usr/bin/env bash
     set -euo pipefail
-    pip install --quiet pyyaml 2>/dev/null || true
+    missing=()
+    for module in yaml jsonschema; do
+        python3 -c "import ${module}" 2>/dev/null || missing+=("${module}")
+    done
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "host test dependencies missing: ${missing[*]}" >&2
+        echo "they are declared in tests/requirements.txt; install them with:" >&2
+        echo "    pip install -r tests/requirements.txt" >&2
+        exit 1
+    fi
     python3 tests/run_suite.py
 
 check:
@@ -40,6 +55,16 @@ check:
     test -f system_files/shared/usr/lib/systemd/system/bootc-unified-storage.service.d/10-utah-local-test.conf
     grep -q 'enable gdm.service' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
     grep -q 'enable ublue-system-setup.service' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
+    # Desktop services that must stay enabled across the preset, the build-time
+    # enable in configure-services.sh, and the contract the in-image verifier
+    # checks. A unit enabled in one source but not the others is silent drift
+    # that leaves it off at boot with no test failing. See #19.
+    grep -q 'enable input-remapper.service' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
+    grep -q 'enable bluefin-stats-refresh.timer' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
+    grep -q 'enable_unit input-remapper.service' scripts/configure-services.sh
+    grep -q 'enable_unit bluefin-stats-refresh.timer' scripts/configure-services.sh
+    grep -q 'input-remapper.service' contracts/bluefin-desktop.toml
+    grep -q 'bluefin-stats-refresh.timer' contracts/bluefin-desktop.toml
     grep -q 'disable bootc-fetch-apply-updates.timer' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
     grep -q 'disable bootc-fetch-apply-updates.service' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
     grep -q 'bootc-fetch-apply-updates.timer' scripts/configure-services.sh
@@ -56,7 +81,9 @@ check:
     test -f scripts/verify-gnome-extensions.py
     test -f scripts/mirror-shim.sh
     test -f scripts/install-v4l2loopback.sh
+    test -f scripts/image-repo.sh
     test -f packages/RPM-GPG-KEY-fedora-44-primary
+    test -f scripts/bootc_lifecycle.py
     test -f contracts/bluefin-desktop.toml
     # The reusable image workflow checks out this repository without
     # submodules. Populate them here before validating the source contract;
@@ -82,6 +109,7 @@ check:
     grep -q 'live_customize' iso/scripts/build-iso-tacklebox.sh
     grep -q 'offline_payloads' iso/scripts/build-iso-tacklebox.sh
     grep -q 'Secure Boot DISABLED' iso/scripts/build-iso-tacklebox.sh
+    test -f iso/scripts/lifecycle-e2e.sh
     python3 -m json.tool iso/live/src/etc/bootc-installer/images.json >/dev/null
     python3 -m json.tool iso/live/src/etc/bootc-installer/recipe.json >/dev/null
     grep -q 'org.bootcinstaller.Installer' iso/live/src/install-flatpaks.sh
@@ -159,7 +187,8 @@ check-desktop-contract image_ref="localhost/utah:testing":
       -v "$PWD/scripts/verify-desktop-contract.py:/tmp/verify-desktop-contract.py:ro" \
       "{{ image_ref }}" /tmp/verify-desktop-contract.py /tmp/bluefin-desktop.toml
     podman run --rm --entrypoint /usr/bin/python3 \
-      "{{ image_ref }}" /usr/local/libexec/utah-verify-gnome-extensions
+      -v "$PWD/scripts/verify-gnome-extensions.py:/tmp/verify-gnome-extensions.py:ro" \
+      "{{ image_ref }}" /tmp/verify-gnome-extensions.py
 
 # Fail fast when a contract package is in none of the repositories the image
 # actually enables, instead of discovering it twenty minutes into a build.
@@ -174,22 +203,28 @@ check-desktop-contract image_ref="localhost/utah:testing":
 # three slow dnf resolves to reach the same answer.
 #
 # Resolves dependencies on the pinned base and package image. Needs podman and network.
+# Then probes each [unavailable] entry the same way: a blocked entry that now
+# resolves is stale parity debt, and the base image is already cached.
 check-repos:
     #!/usr/bin/env bash
     set -uo pipefail
-    for attempt in 1 2 3; do
-      python3 scripts/check-repo-availability.py packages/bluefin.toml packages/utah.toml
-      status=$?
-      if [ "$status" -ne 125 ]; then
-        exit "$status"
-      fi
-      echo "check-repos: container engine could not run (exit 125), attempt ${attempt}/3" >&2
-      if [ "$attempt" -ne 3 ]; then
-        sleep $(( attempt * 15 ))
-      fi
-    done
-    echo "check-repos: giving up after 3 engine failures; the registry is not serving the pinned image" >&2
-    exit 125
+    gate() {
+      for attempt in 1 2 3; do
+        python3 scripts/check-repo-availability.py "$@"
+        status=$?
+        if [ "$status" -ne 125 ]; then
+          return "$status"
+        fi
+        echo "check-repos: container engine could not run (exit 125), attempt ${attempt}/3" >&2
+        if [ "$attempt" -ne 3 ]; then
+          sleep $(( attempt * 15 ))
+        fi
+      done
+      echo "check-repos: giving up after 3 engine failures; the registry is not serving the pinned image" >&2
+      return 125
+    }
+    gate packages/bluefin.toml packages/utah.toml || exit "$?"
+    gate --check-unavailable packages/bluefin.toml packages/utah.toml
 
 # packages/bluefin.toml is a verbatim copy of Bluefin's base.toml pinned to
 # the revision in packages/.bluefin-parity-ref.  Drift here is a parity bug,
@@ -232,6 +267,62 @@ baselines bluefin="ghcr.io/ublue-os/bluefin:stable" utah="ghcr.io/projectbluefin
     python3 scripts/image-baseline.py dakota "$run" baselines/dakota
     python3 scripts/image-baseline.py gap
 
+# Partition every Bluefin package Utah lacks by where it could come from:
+# hummingbird-available / factory-built / nowhere. The 2026-09-30 bare-metal
+# audit (#382) ran this pipeline by hand against the OCI image feeds. This
+# is the same pipeline as a single recipe so a future audit -- or a
+# scheduled drift report -- does not reinvent the manual sequence.
+#
+# Pulls the pinned factory OCI repodata (Containerfile PACKAGE_IMAGE_SHA)
+# and Hummingbird's primary.xml directly. No podman run is started; the
+# audit is a static-repodata read against the same pinned inputs
+# scripts/check-repo-availability.py mounts for `just check-repos`, so
+# the verdict and the install transaction cannot disagree on what the
+# repositories offer.
+#
+#   just audit-bluefin-parity                # partition + print, do not write
+#   just audit-bluefin-parity --write        # record the new baseline after printing
+#   just audit-bluefin-parity --check        # compare against the recorded baseline
+#
+# Pass `--ref=<sha|tag|branch>` to audit against a Bluefin revision that
+# is not yet committed to packages/.bluefin-parity-ref. The default is the
+# pinned SHA in that file.
+#
+# Args are interpolated into the body with `{{args}}`, not read from `$@`: a
+# `just` shebang recipe receives no positional parameters (`$# = 0`), so a
+# `"$@"` loop never sees the flags. Value flags use the `--key=value` form
+# because that is all the forwarding script's `case` matches; the flags are
+# re-parsed there.
+audit-bluefin-parity *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    subcommand="run"
+    forward=()
+    for arg in {{args}}; do
+      case "$arg" in
+        --check) subcommand="check" ;;
+        --write) forward+=(--write) ;;
+        --ref=*) forward+=("$arg") ;;
+        *) echo "audit-bluefin-parity: unknown argument: $arg" >&2; exit 64 ;;
+      esac
+    done
+    python3 scripts/audit-bluefin-parity.py "$subcommand" "${forward[@]+"${forward[@]}"}"
+
+# Gate: fail when an audit partition grew past baselines/audit-baseline.json.
+# The script also fails on a missing baseline; first run is `just
+# audit-bluefin-parity --write` to record the starting state of the debt.
+check-audit-parity *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    forward=()
+    for arg in {{args}}; do
+      case "$arg" in
+        --ref=*) forward+=("$arg") ;;
+        *) echo "check-audit-parity: unknown argument: $arg" >&2; exit 64 ;;
+      esac
+    done
+    python3 scripts/audit-bluefin-parity.py check "${forward[@]+"${forward[@]}"}"
+
 image_name base_name stream flavor:
     @python3 scripts/flavors.py image "{{ flavor }}"
 
@@ -267,6 +358,9 @@ build-ghcr base_name stream flavor kernel_pin="":
     # for non-PR events -- so pulling either would 401 on exactly the runs that
     # need them most.  It passes GITHUB_TOKEN through to this recipe, so use it.
     if [ -n "${GITHUB_TOKEN:-}" ]; then
+      auth_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/utah-registry.XXXXXX")"
+      trap 'rm -rf "$auth_dir"' EXIT
+      export DOCKER_CONFIG="$auth_dir" REGISTRY_AUTH_FILE="$auth_dir/config.json"
       echo "${GITHUB_TOKEN}" | podman login ghcr.io -u "${GITHUB_ACTOR:-x}" --password-stdin
     fi
     # main builds neither the OGC kernel nor an NVIDIA module, so it keeps the
@@ -277,6 +371,32 @@ build-ghcr base_name stream flavor kernel_pin="":
     if [ "{{ flavor }}" != main ]; then
       cache_ref="$(./scripts/kernel-cache-tag.sh)"
       cache_ref="ghcr.io/{{ repo_organization }}/{{ kernel_cache_image }}:${cache_ref}"
+      # Verify immutable bytes, never a mutable tag that FROM can re-resolve.
+      # The reusable builder runs this via sudo, whose secure_path drops tools
+      # installed through GITHUB_PATH. Bootstrap a checksummed binary outside
+      # the context in CI and invoke it by absolute path; local builds require it.
+      cosign_bin="$(command -v cosign || true)"
+      if [ "${GITHUB_ACTIONS:-false}" = true ]; then
+        case "$(uname -m)" in
+          x86_64) cosign_arch=amd64; cosign_sha=064954c5d8c7e3b28188eee5b1727b31c411550bc5fefd41aa672d3c761d103a ;;
+          aarch64) cosign_arch=arm64; cosign_sha=56a16480bdd56ec789abaa65924402f6b92c0041f06885995853c05567b76f34 ;;
+          *) echo "Unsupported cosign architecture" >&2; exit 1 ;;
+        esac
+        cosign_bin="${RUNNER_TEMP:?}/utah-tools/cosign"
+        mkdir -p "${cosign_bin%/*}"
+        curl -fsSL "https://github.com/sigstore/cosign/releases/download/v2.6.1/cosign-linux-${cosign_arch}" -o "$cosign_bin"
+        echo "${cosign_sha}  ${cosign_bin}" | sha256sum --check --strict
+        chmod 0755 "$cosign_bin"
+      fi
+      if [ -z "$cosign_bin" ]; then
+        echo "cosign is required to verify the kernel cache before building" >&2
+        exit 1
+      fi
+      digest="$(skopeo inspect "docker://${cache_ref}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["Digest"])')"
+      cache_ref="${cache_ref%:*}@${digest}"
+      "$cosign_bin" verify "$cache_ref" \
+        --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+        --certificate-identity-regexp '^https://github\.com/projectbluefin/utah/\.github/workflows/build\.yml@refs/(heads/[^@]+|pull/[0-9]+/merge)$'
       base_args=(--build-arg BASE_IMAGE="$cache_ref")
     fi
     # Registry layer cache, the same arrangement Bluefin uses.  The package
@@ -308,9 +428,36 @@ build-ghcr base_name stream flavor kernel_pin="":
     else
       echo "Registry layer cache: off (${layer_cache_ref} is not readable from here)"
     fi
+    # Key the package transaction on Hummingbird's repository revision so the
+    # layer cache above cannot pin a rolling repository to an old snapshot
+    # (HUMMINGBIRD_REPO_DAY in the Containerfile). An unreachable repo
+    # would fail the transaction anyway; warn here and let it.
+    # Bash builtins only: the recipe also runs in a sandboxed PATH
+    # (tests/test_kernel_cache_signing.py), where sed and curl may be absent.
+    hb_baseurl=""
+    while IFS= read -r line; do
+      case "$line" in baseurl=*) hb_baseurl="${line#baseurl=}"; break ;; esac
+    done < packages/hummingbird.repo
+    hb_revision=""
+    if command -v curl >/dev/null 2>&1 \
+        && repomd="$(curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "${hb_baseurl%/}/repodata/repomd.xml")" \
+        && [[ "$repomd" =~ \<revision\>([^<]+)\</revision\> ]]; then
+      hb_revision="${BASH_REMATCH[1]}"
+    fi
+    if [ -z "$hb_revision" ]; then
+      echo "::warning title=Hummingbird revision unresolved::${hb_baseurl} gave no repomd revision; the package layer may come from cache"
+      hb_revision=unresolved
+    elif [[ "$hb_revision" =~ ^[0-9]{9,}$ ]]; then
+      # The revision is a publish timestamp and moves several times a day.
+      # Keyed on its UTC day, the transaction refreshes once a day and the
+      # builds in between still share the cached layer.
+      hb_revision="$(date -u -d "@${hb_revision}" +%Y-%m-%d)"
+    fi
+    echo "Hummingbird repository day: ${hb_revision}"
     podman build \
       "${base_args[@]}" \
       "${layer_cache_args[@]}" \
+      --build-arg HUMMINGBIRD_REPO_DAY="$hb_revision" \
       --build-arg IMAGE_NAME="$image_name" \
       --build-arg IMAGE_ID="{{ image }}" \
       --build-arg IMAGE_FLAVOR={{ flavor }} \
@@ -355,6 +502,18 @@ luks-test iso_path="output/utah-live.iso" image="ghcr.io/projectbluefin/utah:tes
 # verified result can be driven by hand instead of only asserted about.
 try-installed:
     bash iso/scripts/boot-installed.sh
+
+# Validate bootc upgrade and rollback lifecycle between two immutable digests in QEMU.
+# Boots a known Utah deployment, stages/upgrades to candidate digest via bootc/uupd,
+# verifies graphical desktop, rolls back, and verifies the previous deployment.
+# Defaults to the debug live ISO -- `just iso testing 1` -- because the harness
+# logs in over SSH as the `utahtest` account the installer provisions. The disk
+# from `just generate-bootable-image` has no such account and cannot be used.
+# The ISO installs its payload as baseline_image, then the harness stages
+# candidate_image; the candidate has no default because staging the baseline
+# ref again is a no-op and would never exercise an upgrade.
+lifecycle-test candidate_image disk_or_iso="output/utah-live.iso" baseline_image="ghcr.io/projectbluefin/utah:testing":
+    bash iso/scripts/lifecycle-e2e.sh "{{ disk_or_iso }}" "{{ baseline_image }}" "{{ candidate_image }}"
 
 generate-build-tags base_name stream flavor kernel_pin build_number version event_name event_number:
     @echo "{{ stream }} {{ version }}"

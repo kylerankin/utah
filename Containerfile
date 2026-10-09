@@ -1,16 +1,16 @@
-ARG BASE_IMAGE=quay.io/hummingbird-community/bootc-os:latest@sha256:ee9a5d4d23795b064d0192a3ebdd91f6c9f21fbc61567b2acf5364727964fc54
+ARG BASE_IMAGE=quay.io/hummingbird-community/bootc-os:latest@sha256:c1b785e5a38b1834580b62b175fa807116c6e3a94b5d719ce3b43a194bbfe886
 # The package factory publishes a complete, digest-addressable RPM repository.
 # Keep this pin in Utah so an image build is reproducible and can be reviewed
 # against the exact package set it consumes.
 ARG PACKAGE_IMAGE=ghcr.io/projectbluefin/utah-packages
-ARG PACKAGE_IMAGE_SHA=sha256:377715961b6a5af9021353d4dab8b8e5fdaa1d1c343bc617bb24320ecee270b6
+ARG PACKAGE_IMAGE_SHA=sha256:0f8595d5b67ced62104ec2f6a0a1b34beafa0ee684100573e91b1d401c1f66ab
 # CI keeps PACKAGE_IMAGE_SHA pinned. PACKAGE_IMAGE_REF supports a local image
 # in containers-storage, where no registry digest is available.
 ARG PACKAGE_IMAGE_REF=${PACKAGE_IMAGE}@${PACKAGE_IMAGE_SHA}
 ARG COMMON_IMAGE=ghcr.io/projectbluefin/common
-ARG COMMON_IMAGE_SHA=sha256:57b4cada5f4dba3d61c01837f8ffae067bdba3d2968226abaecef5c6e88d8356
+ARG COMMON_IMAGE_SHA=sha256:39b8041fb0e88a0b001d8cddb168e841681e6db2f356dca45cdfc478a49c3a6b
 ARG BREW_IMAGE=ghcr.io/ublue-os/brew
-ARG BREW_IMAGE_SHA=sha256:bc6f5a9fc4f28cded2fe567b31f74825c1f4481d5e43c537c3fcc0d3df6d22ab
+ARG BREW_IMAGE_SHA=sha256:2aaf87e3757466bc28d056505a651c7ca5c56fd28f6ff709b34f3f5dbc860e89
 
 FROM ${COMMON_IMAGE}@${COMMON_IMAGE_SHA} AS common
 FROM ${BREW_IMAGE}@${BREW_IMAGE_SHA} AS brew
@@ -52,6 +52,9 @@ FROM ${BASE_IMAGE}
 # transaction reads. These, the pinned package image and the install script
 # are the whole input to the expensive layer, so everything else waits its
 # turn below them.
+# utah-packages.repo carries a `# factory-pin:` stamp mirroring
+# PACKAGE_IMAGE_SHA. It is the transaction's cache key for the factory: the
+# ARG change alone does not bust the layer on CI's buildah (#371).
 COPY packages/bluefin.toml packages/utah.toml contracts/bluefin-desktop.toml /usr/share/utah/
 COPY packages/hummingbird.repo packages/nvidia-container.repo packages/utah-packages.repo /etc/yum.repos.d/
 # Hummingbird signs its RPMs with Red Hat's release key 2 (fd431d51); the key
@@ -84,6 +87,7 @@ COPY scripts/install-packages.py \
      scripts/verify-efi-chain.sh \
      scripts/fix-home-labels.sh \
      scripts/install-v4l2loopback.sh \
+     scripts/image-repo.sh \
      /tmp/utah-scripts/
 # Common publishes Bluefin artwork, desktop defaults, Brewfiles, and setup
 # hooks in a separate profile from its shared system files. Both are required:
@@ -95,8 +99,28 @@ COPY --from=brew /system_files /tmp/utah-brew
 COPY system_files/shared /tmp/utah-local
 
 
+# Neutral login-screen artwork, Bluefin-LTS style (#378). generic-logos provides
+# the same paths fedora-logos does, so system-logos dependents (gdm) stay
+# satisfied; the transaction then erases the files while keeping the rpmdb
+# record, which leaves GDM with no Fedora mark at all. Fedora repositories are
+# never enabled at runtime, so the noarch data RPM comes from the release
+# mirror directly: the signed build (kojipkgs ships the same payload unsigned),
+# pinned and checksummed like uupd. URL and digest move together by hand; the
+# RPM changes about yearly.
+ARG GENERIC_LOGOS_URL=https://download.fedoraproject.org/pub/fedora/linux/releases/44/Everything/x86_64/os/Packages/g/generic-logos-18.0.0-27.fc44.noarch.rpm
+ARG GENERIC_LOGOS_SHA256=2f9247f480788ef5cea4bc9f872bc5653ae0578fb7bec045f8b807cacc50699e
 # The v4l2loopback stage's output is bind mounted rather than copied: it is two
 # files, and a COPY would be a layer of its own.
+# After Common's files are copied into place we rename its `00-entry.just` to
+# `00-common.just` so Utah's entry point (`system_files/.../00-entry.just`,
+# staged on the next line of this same RUN by `cp -a /tmp/utah-local/. /`)
+# can re-import it from a shallower depth than Common's recipes. On `just`
+# >= 1.56 the shallower import wins duplicate resolution, so Utah's
+# `60-custom.just` overrides Common's recipes in the live image. Earlier
+# `just` releases deduplicated the shared AST to the deeper import and
+# Common's recipes silently shadowed ours, so every override reverted
+# (issue #449). The `just` >= 1.56 floor is enforced by
+# tests/test_ujust_overrides.py.
 RUN --mount=type=bind,from=v4l2loopback,source=/out,target=/tmp/utah-v4l2loopback,ro \
     for pair in install-packages.py:utah-install-packages \
                 verify-rpm-contract.py:utah-verify-rpm-contract \
@@ -111,16 +135,20 @@ RUN --mount=type=bind,from=v4l2loopback,source=/out,target=/tmp/utah-v4l2loopbac
                 mirror-shim.sh:utah-mirror-shim \
                 verify-efi-chain.sh:utah-verify-efi-chain \
                 fix-home-labels.sh:utah-fix-home-labels \
-                install-v4l2loopback.sh:utah-install-v4l2loopback; do \
+                install-v4l2loopback.sh:utah-install-v4l2loopback \
+                image-repo.sh:utah-image-repo; do \
       install -Dm 0755 "/tmp/utah-scripts/${pair%%:*}" "/usr/local/libexec/${pair##*:}" || exit 1; \
     done && \
     cp -a /tmp/utah-common/. / && \
     cp -a /tmp/utah-bluefin/. / && \
     cp -a /tmp/utah-brew/. / && \
+    mv /usr/share/ublue-os/just/00-entry.just /usr/share/ublue-os/just/00-common.just && \
     cp -a /tmp/utah-local/. / && \
     cp -a /tmp/utah-v4l2loopback/. / && \
     rm -rf /tmp/utah-scripts /tmp/utah-common /tmp/utah-bluefin /tmp/utah-brew /tmp/utah-local && \
-    rm -f /etc/dconf/db/distro.d/05-bluefin-searchlight-extension
+    rm -f /etc/dconf/db/distro.d/05-bluefin-searchlight-extension && \
+    curl -fsSL "${GENERIC_LOGOS_URL}" -o /tmp/generic-logos.rpm && \
+    echo "${GENERIC_LOGOS_SHA256}  /tmp/generic-logos.rpm" | sha256sum --check --strict
 # The last line drops Common's settings for the Search Light extension. Utah no
 # longer ships that extension: its shader code calls set_shader_source, which
 # GNOME 51 removed, so it errored at load and failed the ISO end-to-end test.
@@ -146,7 +174,28 @@ RUN --mount=type=bind,from=v4l2loopback,source=/out,target=/tmp/utah-v4l2loopbac
 # The package lists live in the manifests, not here.  When they were spelled
 # out in this RUN as well, the two copies drifted and the contract check was
 # asserting a different set than the install had asked for.
+# Hummingbird's repository is not pinned: it is a rolling distribution and
+# Utah takes its packages as they publish. But nothing in this layer's cache
+# key moved when they did -- the manifests, the repo files and the factory
+# stamp all stay put -- so the registry layer cache served the same
+# transaction night after night, and new Hummingbird RPMs reached testing only
+# when a base-image bump happened to bust it. `just build-ghcr` passes the UTC
+# day of the repository's repomd <revision> (a publish timestamp), so the
+# transaction picks up new Hummingbird packages once a day and same-day builds
+# still share the cached layer. Local builds leave it unset.
+ARG HUMMINGBIRD_REPO_DAY=unset
 RUN --mount=type=bind,from=packages,source=/repository,target=/etc/utah-packages,ro \
+    echo "Hummingbird repository day: ${HUMMINGBIRD_REPO_DAY}" && \
+    # dracut's crypt generator exits 2 on crypttab-less boots: with no
+    # /etc/crypttab it takes a bare top-level 'return 0', which bash
+    # rejects outside a function (exit 2, logged as a failed generator).
+    # An empty crypttab parses to zero entries and exits 0; the installer
+    # overwrites it on LUKS installs. Seeded first in the transaction so
+    # any dracut run (kernel install here, initramfs regeneration later)
+    # picks it up into the initramfs (#590). NOTE: HUMMINGBIRD_REPO_DAY
+    # must stay directly above this RUN, so the rationale lives here, not
+    # above it (tests/test_hummingbird_repo_day.py).
+    : > /etc/crypttab && \
     /usr/local/libexec/utah-install-packages \
       /usr/share/utah/bluefin.toml /usr/share/utah/utah.toml && \
     IMAGE_FLAVOR=main /usr/local/libexec/utah-verify-rpm-contract \
@@ -157,6 +206,10 @@ RUN --mount=type=bind,from=packages,source=/repository,target=/etc/utah-packages
 
 # Per-image arguments. Nothing above this line may read them; see the note on
 # layer discipline at the top.
+# Re-declared without a default so the provenance label at the end can read
+# the global pin's value: a global ARG is only in scope for FROM lines, and
+# without this the label baked empty (#371 follow-up).
+ARG PACKAGE_IMAGE_SHA
 ARG IMAGE_NAME=utah
 # Canonical OS identity, distinct from the repository name a flavor publishes
 # under. Always utah; never flavored.
@@ -250,13 +303,23 @@ RUN --mount=type=bind,from=packages,source=/repository,target=/etc/utah-packages
 # is the NVIDIA and OGC step, not after the main transaction. The lint that
 # checks the result runs in the same layer: nothing can change between the two.
 # The home-label check runs first: clean-stage removes the utah-* helpers.
+#
+# /var/home is created after clean-stage (which strips all of /var except
+# cache) but before lint, so lint still proves the directory is covered by a
+# tmpfiles.d entry (utah-home.conf). The directory must ship in the image:
+# /home is a symlink to var/home and useradd ships HOME=/home (#576), so any
+# `useradd --create-home` fails on a dangling symlink -- the installer chroot
+# on a fresh install, the tacklebox customize container, and the live ISO
+# build all broke with "cannot create directory /home", exit 12 (#602).
 RUN /usr/local/libexec/utah-fix-home-labels --check && \
     /usr/local/libexec/utah-clean-stage && \
+    mkdir -p /var/home && \
     bootc container lint --fatal-warnings --skip nonempty-boot
 
 LABEL org.opencontainers.image.title="Utah"
 LABEL org.opencontainers.image.description="A Hummingbird-based Bluefin GNOME workstation"
 LABEL org.opencontainers.image.source="https://github.com/projectbluefin/utah"
+LABEL io.projectbluefin.utah.factory-digest="${PACKAGE_IMAGE_SHA}"
 LABEL org.opencontainers.image.vendor="${IMAGE_VENDOR}"
 LABEL org.opencontainers.image.version="${VERSION}"
 LABEL containers.bootc=1
