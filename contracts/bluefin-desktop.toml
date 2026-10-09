@@ -179,6 +179,7 @@ enabled = [
   "flatpak-preinstall.service",
   "gdm.service",
   "input-remapper.service",
+  "bluefin-stats-refresh.timer",
   "ModemManager.service",
   "switcheroo-control.service",
   "ublue-system-setup.service",

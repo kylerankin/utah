@@ -242,6 +242,24 @@ class MigratedSetupHookContractTests(unittest.TestCase):
                     env.assert_stamped(self)
                     env.assert_effect(self)
 
+    def test_tailscale_defers_when_binary_absent(self):
+        # Criterion 4: the hook must never invoke a missing Tailscale binary.
+        # Absent package -> defer (exit 0, no stamp, no invocation) so it retries
+        # once the package is installed, instead of burning a stamp before it ran.
+        env = HookEnvironment(self, "tailscale")
+        (env.bin / "tailscale").unlink()
+        deferred = env.run()
+        self.assertEqual(deferred.returncode, 0, deferred.stderr)
+        self.assertFalse(env.stamp.exists())
+        self.assertFalse(env.actions.exists())
+        # Once the binary is present, the operator grant runs and commits.
+        env.install("tailscale", TOOLS["tailscale"])
+        recovered = env.run()
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        env.assert_stamped(self)
+        env.assert_effect(self)
+
 
 if __name__ == "__main__":
+    unittest.main()
     unittest.main()

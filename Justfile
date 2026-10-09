@@ -55,6 +55,16 @@ check:
     test -f system_files/shared/usr/lib/systemd/system/bootc-unified-storage.service.d/10-utah-local-test.conf
     grep -q 'enable gdm.service' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
     grep -q 'enable ublue-system-setup.service' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
+    # Desktop services that must stay enabled across the preset, the build-time
+    # enable in configure-services.sh, and the contract the in-image verifier
+    # checks. A unit enabled in one source but not the others is silent drift
+    # that leaves it off at boot with no test failing. See #19.
+    grep -q 'enable input-remapper.service' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
+    grep -q 'enable bluefin-stats-refresh.timer' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
+    grep -q 'enable_unit input-remapper.service' scripts/configure-services.sh
+    grep -q 'enable_unit bluefin-stats-refresh.timer' scripts/configure-services.sh
+    grep -q 'input-remapper.service' contracts/bluefin-desktop.toml
+    grep -q 'bluefin-stats-refresh.timer' contracts/bluefin-desktop.toml
     grep -q 'disable bootc-fetch-apply-updates.timer' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
     grep -q 'disable bootc-fetch-apply-updates.service' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
     grep -q 'bootc-fetch-apply-updates.timer' scripts/configure-services.sh

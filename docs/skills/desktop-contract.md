@@ -71,7 +71,7 @@ The TOML's sections are the contract's table of contents:
   `bluetooth.service`, `ublue-system-setup.service`, `flatpak-preinstall.service`,
   `flatpak-nuke-fedora.service`, `brew-setup.service`, `dconf-update.service`,
   `bootc-unified-storage.service`, `input-remapper.service`,
-  `ModemManager.service`, `cups.socket`, `systemd-boot-update.service`,
+  `bluefin-stats-refresh.timer`, `ModemManager.service`, `cups.socket`, `systemd-boot-update.service`,
   `uupd.timer`. Update policy delegates
   background updates to `uupd.timer`; `bootc-fetch-apply-updates.timer` and
   `bootc-fetch-apply-updates.service` are masked in `/etc` and `/usr/lib` (and

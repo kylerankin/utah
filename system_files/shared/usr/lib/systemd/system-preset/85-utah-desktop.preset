@@ -26,6 +26,9 @@ enable dconf-update.service
 enable flatpak-preinstall.service
 enable flatpak-nuke-fedora.service
 enable input-remapper.service
+# Bluefin community stats refresh for fastfetch; enabled next to the desktop
+# units so the timer fires on boot and every day. See #19.
+enable bluefin-stats-refresh.timer
 enable ModemManager.service
 # Printing on demand, as Fedora's preset enables it for Bluefin.
 enable cups.socket

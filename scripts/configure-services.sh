@@ -84,6 +84,9 @@ enable_unit bootc-unified-storage.service
 # daemon running, udev autoload fails on input devices and the GUI prompts for
 # root credentials on launch. Enable it next to the desktop units; see #99.
 enable_unit input-remapper.service
+# Bluefin community stats refresh for fastfetch; enable next to the desktop
+# units so the timer fires on boot and every day. See #19.
+enable_unit bluefin-stats-refresh.timer
 enable_unit ModemManager.service
 # Printing on demand, as Fedora's preset enables it for Bluefin; Hummingbird's
 # 99-default-disable would leave it off.
