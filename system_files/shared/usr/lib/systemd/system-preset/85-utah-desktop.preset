@@ -11,6 +11,7 @@ enable fwupd.service
 enable fwupd-refresh.timer
 enable tailscaled.service
 enable uupd.timer
+enable bluefin-stats-refresh.timer
 enable ublue-system-setup.service
 enable systemd-resolved.service
 # Keep the ESP boot manager current on systemd-boot systems (#363). A drop-in
