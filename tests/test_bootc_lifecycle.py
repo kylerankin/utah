@@ -903,9 +903,9 @@ class TestBootmgrValidation(unittest.TestCase):
 class TestComposefsBootmgrValidation(unittest.TestCase):
     """composefs-backend installs: match BLS entries by `composefs=` verity.
 
-    PR #938 switched the Utah ISO to install with the composefs backend by
-    default, so the lifecycle harness must validate the layout users now
-    actually receive. composefs deployments write a `composefs=<hex>` karg
+    PR #938 proposes installing Utah with the composefs backend by default;
+    this validator supports that backend without changing the default itself.
+    composefs deployments write a `composefs=<hex>` karg
     into every BLS entry instead of an `ostree=` path, and `bootc status`
     exposes that same digest as `BootEntryComposefs.verity`.
     """

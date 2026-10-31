@@ -103,8 +103,8 @@ class BootFilesTests(unittest.TestCase):
 
     def test_composefs_entry_passes_gate(self):
         # The composefs backend writes a `composefs=<hex>` karg instead of an
-        # `ostree=` path (PR #938 made it the Utah install default); the gate
-        # must treat such an entry as a bootc Type #1 entry and check it.
+        # `ostree=` path. Recognize it as bootc regardless of which backend
+        # the installer selects by default.
         verity = "c" * 128
         self.entry(
             f"linux /boot/bootc_composefs-{verity[:16]}/vmlinuz\n"

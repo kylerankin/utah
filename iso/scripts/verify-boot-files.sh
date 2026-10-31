@@ -21,9 +21,9 @@ for root in "$@"; do
                 initrd) initrd+=("$value") ;;
                 options)
                     # bootc writes an ostree= karg (ostree backend) or a
-                    # composefs= karg (composefs backend) into every Type #1
-                    # entry. PR #938 made the composefs backend the Utah
-                    # install default, so both spellings count here.
+                    # composefs= karg (composefs backend) into every Type #1 entry.
+                    # PR #938 proposes composefs as the install default;
+                    # validate either backend regardless of that choice.
                     if [[ " $value " == *" ostree="* \
                        || " $value " == *" composefs="* \
                        || " $value " == *" composefs.digest="* ]]; then
